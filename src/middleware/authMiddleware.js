@@ -1,14 +1,12 @@
+// Authentication Middleware
+// Currently not implemented - can be added later when needed
+
 export const protect = (req, res, next) => {
-  const authHeader = req.headers.authorization;
+  // Authentication disabled - pass through all requests
+  next();
+};
 
-  if (!authHeader || !authHeader.startsWith("Bearer")) {
-    return res.status(401).json({
-      message: "Not authorized",
-      status: false,
-      dataFound: false
-    });
-  }
-
-  // later you can verify JWT here
+export const optionalAuth = (req, res, next) => {
+  // Authentication disabled - pass through all requests
   next();
 };

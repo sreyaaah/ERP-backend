@@ -1,4 +1,7 @@
 import Customer from "../models/Customer.js";
+import { Country } from "../models/Location.js";
+import { deleteImage } from "../middleware/uploadMiddleware.js";
+import { exportToExcel, exportToPDF, exportCustomerDetailsToPDF } from "../utils/exportUtils.js";
 
 /* GET /api/customers (List + Search + Filter + Sort + Pagination) */
 export const getCustomers = async (req, res) => {
@@ -14,15 +17,39 @@ export const getCustomers = async (req, res) => {
 
     const skip = (page - 1) * limit;
 
-    // 🔍 Search + Filter
-    const query = {};
+    const query = { isDeleted: { $ne: true } };
     if (search) {
+      const searchRegex = new RegExp(search, "i");
+
+      // Find country codes matching search term to include in search
+      const matchingCountries = await Country.find({
+        name: { $regex: search, $options: "i" }
+      });
+      const countryCodes = matchingCountries.map(c => c.code);
+
       query.$or = [
-        { firstName: new RegExp(search, "i") },
-        { lastName: new RegExp(search, "i") },
-        { email: new RegExp(search, "i") },
-        { phone: new RegExp(search, "i") },
-        { code: new RegExp(search, "i") }
+        { firstName: searchRegex },
+        { lastName: searchRegex },
+        { email: searchRegex },
+        { phone: searchRegex },
+        { code: searchRegex },
+        { address: searchRegex },
+        { city: searchRegex },
+        { state: searchRegex },
+        { country: searchRegex },
+        { postalCode: searchRegex },
+        { gstin: searchRegex },
+        ...(countryCodes.length > 0 ? [{ country: { $in: countryCodes } }] : []),
+        // Full name search
+        {
+          $expr: {
+            $regexMatch: {
+              input: { $concat: ["$firstName", " ", "$lastName"] },
+              regex: search,
+              options: "i"
+            }
+          }
+        }
       ];
     }
     if (status) query.status = status;
@@ -33,23 +60,42 @@ export const getCustomers = async (req, res) => {
       .skip(skip)
       .limit(Number(limit));
 
+    // Get all countries to map codes to names
+    const countries = await Country.find({});
+    const countryMap = countries.reduce((acc, c) => {
+      acc[c.code] = c.name;
+      return acc;
+    }, {});
+
     res.json({
       message: "Data Retrieved Successfully",
       status: true,
       dataFound: customers.length > 0,
-      data: customers.map(c => ({
-        id: c._id,
-        code: c.code,
-        customer: `${c.firstName} ${c.lastName}`,
-        email: c.email,
-        phone: c.phone,
-        address: c.address,
-        city: c.city,
-        state: c.state,
-        country: c.country,
-        postalCode: c.postalCode,
-        status: c.status
-      })),
+      data: customers.map(c => {
+        // If country is a code try to get the name
+        const countryDisplay = (c.country && c.country.length === 2)
+          ? (countryMap[c.country] || c.country)
+          : c.country;
+
+        return {
+          id: c._id,
+          code: c.code,
+          customer: `${c.firstName} ${c.lastName || ""}`.trim(),
+          firstName: c.firstName,
+          lastName: c.lastName,
+          email: c.email,
+          phone: c.phone,
+          address: c.address,
+          city: c.city,
+          state: c.state,
+          country: countryDisplay,
+          postalCode: c.postalCode,
+          gstin: c.gstin,
+          avatar: c.avatar,
+          status: c.status,
+          createdAt: c.createdAt
+        };
+      }),
       pagination: {
         total,
         page: Number(page),
@@ -60,7 +106,6 @@ export const getCustomers = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error("Get customers error:", error);
     res.status(500).json({
       message: error.message || "Failed to retrieve customers",
       status: false,
@@ -72,10 +117,28 @@ export const getCustomers = async (req, res) => {
 /* POST /api/customers/add */
 export const addCustomer = async (req, res) => {
   try {
-    const count = await Customer.countDocuments();
-    const code = `CU${String(count + 1).padStart(3, "0")}`;
+    const lastCustomer = await Customer.findOne().sort({ code: -1 }).select('code');
+    let nextNumber = 1;
 
-    await Customer.create({ ...req.body, code });
+    if (lastCustomer && lastCustomer.code) {
+      const lastNumber = parseInt(lastCustomer.code.replace('CU', ''));
+      nextNumber = lastNumber + 1;
+    }
+
+    const code = `CU${String(nextNumber).padStart(3, "0")}`;
+
+    const customerData = { ...req.body, code };
+
+    // Remove empty/null optional fields entirely to support sparse unique index
+    if (!customerData.email || customerData.email.trim() === "") delete customerData.email;
+    if (!customerData.phone || customerData.phone.trim() === "") delete customerData.phone;
+    if (!customerData.gstin || customerData.gstin.trim() === "") delete customerData.gstin;
+
+    if (req.file) {
+      customerData.avatar = `/uploads/customers/${req.file.filename}`;
+    }
+
+    await Customer.create(customerData);
 
     res.status(201).json({
       message: "Customer Created Successfully",
@@ -83,12 +146,14 @@ export const addCustomer = async (req, res) => {
       dataFound: true
     });
   } catch (error) {
-    console.error("Add customer error:", error);
+    if (req.file) {
+      deleteImage(req.file.filename);
+    }
 
-    // Handle duplicate key error
     if (error.code === 11000) {
+      const field = Object.keys(error.keyPattern)[0];
       return res.status(400).json({
-        message: "Customer with this email already exists",
+        message: `Customer with this ${field} already exists`,
         status: false,
         dataFound: false
       });
@@ -104,47 +169,112 @@ export const addCustomer = async (req, res) => {
 
 /* GET /api/customers/:id */
 export const getCustomerById = async (req, res) => {
-  const customer = await Customer.findById(req.params.id);
+  try {
+    const customer = await Customer.findById(req.params.id);
 
-  if (!customer) {
-    return res.status(404).json({
-      message: "Customer Not Found",
+    if (!customer) {
+      return res.status(404).json({
+        message: "Customer Not Found",
+        status: false,
+        dataFound: false
+      });
+    }
+
+    // If country is a code, try to get the name
+    let countryDisplay = customer.country;
+    if (customer.country && customer.country.length === 2) {
+      const country = await Country.findOne({ code: customer.country });
+      if (country) countryDisplay = country.name;
+    }
+
+    res.json({
+      message: "Data Retrieved Successfully",
+      status: true,
+      dataFound: true,
+      data: {
+        id: customer._id,
+        code: customer.code,
+        customer: `${customer.firstName} ${customer.lastName}`,
+        firstName: customer.firstName,
+        lastName: customer.lastName,
+        email: customer.email,
+        phone: customer.phone,
+        address: customer.address,
+        city: customer.city,
+        state: customer.state,
+        country: countryDisplay,
+        postalCode: customer.postalCode,
+        gstin: customer.gstin,
+        avatar: customer.avatar,
+        status: customer.status,
+        createdAt: customer.createdAt,
+        updatedAt: customer.updatedAt
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: error.message || "Failed to retrieve customer",
       status: false,
       dataFound: false
     });
   }
-
-  res.json({
-    message: "Data Retrieved Successfully",
-    status: true,
-    dataFound: true,
-    data: {
-      id: customer._id,
-      code: customer.code,
-      customer: `${customer.firstName} ${customer.lastName}`,
-      email: customer.email,
-      phone: customer.phone,
-      address: customer.address,
-      city: customer.city,
-      state: customer.state,
-      country: customer.country,
-      postalCode: customer.postalCode,
-      status: customer.status
-    }
-  });
 };
 
 /* PUT /api/customers/:id */
 export const updateCustomer = async (req, res) => {
   try {
-    await Customer.findByIdAndUpdate(req.params.id, req.body);
+    const customer = await Customer.findById(req.params.id);
+
+    if (!customer) {
+      if (req.file) {
+        deleteImage(req.file.filename);
+      }
+      return res.status(404).json({
+        message: "Customer Not Found",
+        status: false,
+        dataFound: false
+      });
+    }
+
+    const updateData = { ...req.body };
+
+    // Remove empty/null optional fields
+    if (!updateData.email || updateData.email.trim() === "") delete updateData.email;
+    if (!updateData.phone || updateData.phone.trim() === "") delete updateData.phone;
+    if (!updateData.gstin || updateData.gstin.trim() === "") delete updateData.gstin;
+
+    // Handle new image upload
+    if (req.file) {
+      // Delete old image if exists
+      if (customer.avatar) {
+        const filename = customer.avatar.split('/').pop();
+        deleteImage(filename);
+      }
+      updateData.avatar = `/uploads/customers/${req.file.filename}`;
+    }
+
+    await Customer.findByIdAndUpdate(req.params.id, updateData);
+
     res.json({
       message: "Customer Details Updated Successfully",
       status: true,
       dataFound: true
     });
   } catch (error) {
-    console.error("Update customer error:", error);
+
+    if (req.file) {
+      deleteImage(req.file.filename);
+    }
+
+    if (error.code === 11000) {
+      const field = Object.keys(error.keyPattern)[0];
+      return res.status(400).json({
+        message: `Customer with this ${field} already exists`,
+        status: false,
+        dataFound: false
+      });
+    }
+
     res.status(500).json({
       message: error.message || "Failed to update customer",
       status: false,
@@ -153,72 +283,224 @@ export const updateCustomer = async (req, res) => {
   }
 };
 
-/* PATCH /api/customers/:id/status */
+/*PATCH /api/customers/:id/status*/
+
 export const toggleCustomerStatus = async (req, res) => {
-  const customer = await Customer.findByIdAndUpdate(
-    req.params.id,
-    { status: req.body.status },
-    { new: true }
-  );
+  try {
+    const customer = await Customer.findByIdAndUpdate(
+      req.params.id,
+      { status: req.body.status },
+      { new: true }
+    );
 
-  res.json({
-    message: "Customer Status Updated Successfully",
-    status: true,
-    dataFound: true,
-    data: { id: customer._id, status: customer.status }
-  });
+    if (!customer) {
+      return res.status(404).json({
+        message: "Customer Not Found",
+        status: false,
+        dataFound: false
+      });
+    }
+
+    res.json({
+      message: "Customer Status Updated Successfully",
+      status: true,
+      dataFound: true,
+      data: { id: customer._id, status: customer.status }
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: error.message || "Failed to update status",
+      status: false,
+      dataFound: false
+    });
+  }
 };
 
-/* DELETE /api/customers/:id */
+/*DELETE /api/customers/:id*/
+
 export const deleteCustomer = async (req, res) => {
-  await Customer.findByIdAndDelete(req.params.id);
-  res.json({
-    message: "Customer Deleted Successfully",
-    status: true,
-    dataFound: true
-  });
+  try {
+    const customer = await Customer.findById(req.params.id);
+
+    if (!customer) {
+      return res.status(404).json({
+        message: "Customer Not Found",
+        status: false,
+        dataFound: false
+      });
+    }
+
+    // Permanent Delete
+    if (customer.avatar) {
+      const filename = customer.avatar.split('/').pop();
+      deleteImage(filename);
+    }
+
+    await Customer.findByIdAndDelete(req.params.id);
+
+    res.json({
+      message: "Customer Deleted Successfully",
+      status: true,
+      dataFound: true
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: error.message || "Failed to delete customer",
+      status: false,
+      dataFound: false
+    });
+  }
 };
 
-/* POST /api/customers/bulk-delete */
+/*POST /api/customers/bulk-delete*/
+
 export const bulkDeleteCustomers = async (req, res) => {
-  const result = await Customer.deleteMany({ _id: { $in: req.body.ids } });
+  try {
+    const ids = req.body.ids;
+    const customers = await Customer.find({ _id: { $in: ids } });
 
-  res.json({
-    message: "Customers Deleted Successfully",
-    status: true,
-    dataFound: true,
-    data: { deletedCount: result.deletedCount }
-  });
+    // Permanent Delete
+    // Delete images first
+    customers.forEach(customer => {
+      if (customer.avatar) {
+        const filename = customer.avatar.split('/').pop();
+        deleteImage(filename);
+      }
+    });
+
+    const result = await Customer.deleteMany({ _id: { $in: ids } });
+
+    res.json({
+      message: "Customers Deleted Successfully",
+      status: true,
+      dataFound: true,
+      data: { deletedCount: result.deletedCount }
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: error.message || "Failed to delete customers",
+      status: false,
+      dataFound: false
+    });
+  }
 };
 
-/* POST /api/customers/bulk-update */
+/*POST /api/customers/bulk-update*/
+
 export const bulkUpdateCustomers = async (req, res) => {
-  const result = await Customer.updateMany(
-    { _id: { $in: req.body.ids } },
-    { status: req.body.status }
-  );
+  try {
+    const result = await Customer.updateMany(
+      { _id: { $in: req.body.ids } },
+      { status: req.body.status }
+    );
 
-  res.json({
-    message: "Customers Updated Successfully",
-    status: true,
-    dataFound: true,
-    data: { updatedCount: result.modifiedCount }
-  });
+    res.json({
+      message: "Customers Updated Successfully",
+      status: true,
+      dataFound: true,
+      data: { updatedCount: result.modifiedCount }
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: error.message || "Failed to update customers",
+      status: false,
+      dataFound: false
+    });
+  }
 };
 
-/* GET /api/customers/export */
+/*GET /api/customers/export*/
+
 export const exportCustomers = async (req, res) => {
-  const format = req.query.format;
+  try {
+    const format = req.query.format;
 
-  if (format === "pdf") {
-    return res.send("PDF file download");
-  }
-  if (format === "xlsx") {
-    return res.send("Excel file download");
-  }
+    // Get all customers for export
+    const customers = await Customer.find({ isDeleted: { $ne: true } }).sort({ createdAt: -1 });
 
-  res.status(400).json({
-    message: "Invalid export format",
-    status: false
-  });
+    // Get all countries to map codes to names
+    const countries = await Country.find({});
+    const countryMap = countries.reduce((acc, c) => {
+      acc[c.code] = c.name;
+      return acc;
+    }, {});
+
+    const enrichedCustomers = customers.map(c => {
+      const customerObj = c.toObject();
+      if (customerObj.country && customerObj.country.length === 2) {
+        customerObj.country = countryMap[customerObj.country] || customerObj.country;
+      }
+      return customerObj;
+    });
+
+    if (format === "xlsx") {
+      const buffer = await exportToExcel(enrichedCustomers);
+
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      res.setHeader("Content-Disposition", `attachment; filename=customers-${Date.now()}.xlsx`);
+
+      return res.send(buffer);
+    }
+
+    if (format === "pdf") {
+      const buffer = await exportToPDF(enrichedCustomers);
+
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename=customers-${Date.now()}.pdf`);
+
+      return res.send(buffer);
+    }
+
+    res.status(400).json({
+      message: "Invalid export format. Use 'pdf' or 'xlsx'",
+      status: false,
+      dataFound: false
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: error.message || "Failed to export customers",
+      status: false,
+      dataFound: false
+    });
+  }
 };
+
+/*GET /api/customers/:id/report*/
+
+export const getCustomerReport = async (req, res) => {
+  try {
+    const customer = await Customer.findById(req.params.id);
+
+    if (!customer) {
+      return res.status(404).json({
+        message: "Customer Not Found",
+        status: false,
+        dataFound: false
+      });
+    }
+
+    // Get country name
+    let countryDisplay = customer.country;
+    if (customer.country && customer.country.length === 2) {
+      const country = await Country.findOne({ code: customer.country });
+      if (country) countryDisplay = country.name;
+    }
+
+    const customerObj = customer.toObject();
+    customerObj.country = countryDisplay;
+
+    const buffer = await exportCustomerDetailsToPDF(customerObj);
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename=customer-report-${customer.code}.pdf`);
+
+    return res.send(buffer);
+  } catch (error) {
+    res.status(500).json({
+      message: error.message || "Failed to generate report",
+      status: false,
+      dataFound: false
+    });
+  }
+};
+

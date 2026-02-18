@@ -8,22 +8,28 @@ import {
   toggleCustomerStatus,
   bulkDeleteCustomers,
   bulkUpdateCustomers,
-  exportCustomers
+  exportCustomers,
+  getCustomerReport
 } from "../controllers/customerController.js";
-import { protect } from "../middleware/authMiddleware.js";
+import { uploadCustomerImage } from "../middleware/uploadMiddleware.js";
+import {
+  validateCustomer,
+  validateCustomerUpdate,
+  validateBulkDelete,
+  validateBulkUpdate
+} from "../middleware/validationMiddleware.js";
 
 const router = express.Router();
 
-router.get("/", protect, getCustomers);
-router.post("/add", protect, addCustomer);
-router.get("/export", protect, exportCustomers);
-
-router.post("/bulk-delete", protect, bulkDeleteCustomers);
-router.post("/bulk-update", protect, bulkUpdateCustomers);
-
-router.get("/:id", protect, getCustomerById);
-router.put("/:id", protect, updateCustomer);
-router.patch("/:id/status", protect, toggleCustomerStatus);
-router.delete("/:id", protect, deleteCustomer);
+router.get("/", getCustomers);
+router.get("/export", exportCustomers);
+router.get("/:id/report", getCustomerReport);
+router.get("/:id", getCustomerById);
+router.post("/add", uploadCustomerImage.single("avatar"), validateCustomer, addCustomer);
+router.put("/:id", uploadCustomerImage.single("avatar"), validateCustomerUpdate, updateCustomer);
+router.patch("/:id/status", toggleCustomerStatus);
+router.delete("/:id", deleteCustomer);
+router.post("/bulk-delete", validateBulkDelete, bulkDeleteCustomers);
+router.post("/bulk-update", validateBulkUpdate, bulkUpdateCustomers);
 
 export default router;

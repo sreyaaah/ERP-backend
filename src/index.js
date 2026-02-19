@@ -7,7 +7,7 @@ import connectDB from "./config/db.js";
 import customerRoutes from "./routes/customerRoutes.js";
 import locationRoutes from "./routes/locationRoutes.js";
 import categoryRoutes from "./routes/categoryRoutes.js";
-import subcategoryRoutes from "/routes/subcategoryRoutes.js";
+import subcategoryRoutes from "./routes/subcategoryRoutes.js";
 
 dotenv.config();
 

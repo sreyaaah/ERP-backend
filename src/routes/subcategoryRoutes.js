@@ -9,7 +9,7 @@ import {
     bulkDeleteSubcategories,
     bulkUpdateSubcategoryStatus,
     exportSubcategories
-} from "./controllers/subcategoryController.js"
+} from "../controllers/subcategoryController.js"
 import { protect } from "../middleware/authMiddleware.js";
 import { validateBulkDelete, validateBulkUpdate } from "../middleware/validationMiddleware.js";
 

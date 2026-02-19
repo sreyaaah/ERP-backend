@@ -1,4 +1,4 @@
-import Subcategory from "../models/Subcategory.js";
+import Subcategory from "/models/Subcategory.js";
 import Category from "../models/Category.js";
 import ExcelJS from "exceljs";
 import PDFDocument from "pdfkit";

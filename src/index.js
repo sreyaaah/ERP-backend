@@ -7,6 +7,8 @@ import connectDB from "./config/db.js";
 import customerRoutes from "./routes/customerRoutes.js";
 import locationRoutes from "./routes/locationRoutes.js";
 import categoryRoutes from "./routes/categoryRoutes.js";
+import brandRoutes from "./routes/brandRoutes.js";
+
 import subcategoryRoutes from "./routes/subcategoryRoutes.js";
 
 dotenv.config();
@@ -32,6 +34,7 @@ app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
 // Routes
 app.use("/api/customers", customerRoutes);
 app.use("/api/categories", categoryRoutes);
+app.use("/api/brand", brandRoutes);
 app.use("/api/subcategories", subcategoryRoutes);
 app.use("/api/categories/:categoryId/subcategories", subcategoryRoutes);
 app.use("/api/locations", locationRoutes);

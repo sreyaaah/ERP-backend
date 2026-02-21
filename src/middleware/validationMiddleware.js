@@ -135,3 +135,52 @@ export const validateBulkUpdate = (req, res, next) => {
 
     next();
 };
+
+// Brand validation schemas
+const brandSchema = Joi.object({
+    name: Joi.string().min(2).max(50).required().messages({
+        "string.empty": "Brand name is required",
+        "string.min": "Brand name must be at least 2 characters",
+        "string.max": "Brand name cannot exceed 50 characters"
+    }),
+    slug: Joi.string().required(),
+    status: Joi.string().valid("Active", "Inactive").default("Active"),
+    image: Joi.string().allow("").optional()
+});
+
+const brandUpdateSchema = Joi.object({
+    name: Joi.string().min(2).max(50).optional(),
+    slug: Joi.string().optional(),
+    status: Joi.string().valid("Active", "Inactive").optional(),
+    image: Joi.string().allow("").optional()
+});
+
+export const validateBrand = (req, res, next) => {
+    const { error } = brandSchema.validate(req.body, { abortEarly: false, allowUnknown: true });
+    if (error) {
+        return res.status(400).json({
+            message: "Validation failed",
+            status: false,
+            errors: error.details.reduce((acc, curr) => {
+                acc[curr.path[0]] = curr.message;
+                return acc;
+            }, {})
+        });
+    }
+    next();
+};
+
+export const validateBrandUpdate = (req, res, next) => {
+    const { error } = brandUpdateSchema.validate(req.body, { abortEarly: false, allowUnknown: true });
+    if (error) {
+        return res.status(400).json({
+            message: "Validation failed",
+            status: false,
+            errors: error.details.reduce((acc, curr) => {
+                acc[curr.path[0]] = curr.message;
+                return acc;
+            }, {})
+        });
+    }
+    next();
+};

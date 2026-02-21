@@ -1,6 +1,6 @@
 import Customer from "../models/Customer.js";
 import { Country } from "../models/Location.js";
-import { deleteImage } from "../middleware/uploadMiddleware.js";
+import { deleteCustomerImage } from "../middleware/uploadMiddleware.js";
 import { exportToExcel, exportToPDF, exportCustomerDetailsToPDF } from "../utils/exportUtils.js";
 
 /* GET /api/customers (List + Search + Filter + Sort + Pagination) */
@@ -147,7 +147,7 @@ export const addCustomer = async (req, res) => {
     });
   } catch (error) {
     if (req.file) {
-      deleteImage(req.file.filename);
+      deleteCustomerImage(req.file.filename);
     }
 
     if (error.code === 11000) {
@@ -227,7 +227,7 @@ export const updateCustomer = async (req, res) => {
 
     if (!customer) {
       if (req.file) {
-        deleteImage(req.file.filename);
+        deleteCustomerImage(req.file.filename);
       }
       return res.status(404).json({
         message: "Customer Not Found",
@@ -248,7 +248,7 @@ export const updateCustomer = async (req, res) => {
       // Delete old image if exists
       if (customer.avatar) {
         const filename = customer.avatar.split('/').pop();
-        deleteImage(filename);
+        deleteCustomerImage(filename);
       }
       updateData.avatar = `/uploads/customers/${req.file.filename}`;
     }
@@ -263,7 +263,7 @@ export const updateCustomer = async (req, res) => {
   } catch (error) {
 
     if (req.file) {
-      deleteImage(req.file.filename);
+      deleteCustomerImage(req.file.filename);
     }
 
     if (error.code === 11000) {
@@ -333,7 +333,7 @@ export const deleteCustomer = async (req, res) => {
     // Permanent Delete
     if (customer.avatar) {
       const filename = customer.avatar.split('/').pop();
-      deleteImage(filename);
+      deleteCustomerImage(filename);
     }
 
     await Customer.findByIdAndDelete(req.params.id);
@@ -364,7 +364,7 @@ export const bulkDeleteCustomers = async (req, res) => {
     customers.forEach(customer => {
       if (customer.avatar) {
         const filename = customer.avatar.split('/').pop();
-        deleteImage(filename);
+        deleteCustomerImage(filename);
       }
     });
 

@@ -7,18 +7,35 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Ensure uploads directory exists
-const uploadsDir = path.join(__dirname, "../../uploads/customers");
-if (!fs.existsSync(uploadsDir)) {
-    fs.mkdirSync(uploadsDir, { recursive: true });
+const customerUploadsDir = path.join(__dirname, "../../uploads/customers");
+if (!fs.existsSync(customerUploadsDir)) {
+    fs.mkdirSync(customerUploadsDir, { recursive: true });
 }
 
-// Configure storage
-const storage = multer.diskStorage({
+const brandUploadsDir = path.join(__dirname, "../../uploads/brands");
+if (!fs.existsSync(brandUploadsDir)) {
+    fs.mkdirSync(brandUploadsDir, { recursive: true });
+}
+
+// Configure storage for customers
+const customerStorage = multer.diskStorage({
     destination: (req, file, cb) => {
-        cb(null, uploadsDir);
+        cb(null, customerUploadsDir);
     },
     filename: (req, file, cb) => {
-        // Generate unique filename: timestamp-randomstring-originalname
+        const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+        const ext = path.extname(file.originalname);
+        const name = path.basename(file.originalname, ext);
+        cb(null, `${name}-${uniqueSuffix}${ext}`);
+    }
+});
+
+// Configure storage for brands
+const brandStorage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        cb(null, brandUploadsDir);
+    },
+    filename: (req, file, cb) => {
         const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
         const ext = path.extname(file.originalname);
         const name = path.basename(file.originalname, ext);
@@ -39,19 +56,39 @@ const fileFilter = (req, file, cb) => {
     }
 };
 
-// Configure multer
+// Configure multer for customers
 export const uploadCustomerImage = multer({
-    storage: storage,
+    storage: customerStorage,
     limits: {
-        fileSize: 5 * 1024 * 1024 
+        fileSize: 5 * 1024 * 1024
+    },
+    fileFilter: fileFilter
+});
+
+// Configure multer for brands
+export const uploadBrandImage = multer({
+    storage: brandStorage,
+    limits: {
+        fileSize: 5 * 1024 * 1024
     },
     fileFilter: fileFilter
 });
 
 // Helper function to delete old image
-export const deleteImage = (filename) => {
+export const deleteCustomerImage = (filename) => {
     try {
-        const fullPath = path.join(uploadsDir, filename);
+        const fullPath = path.join(customerUploadsDir, filename);
+        if (fs.existsSync(fullPath)) {
+            fs.unlinkSync(fullPath);
+        }
+    } catch (error) {
+        // Silent fail
+    }
+};
+
+export const deleteBrandImage = (filename) => {
+    try {
+        const fullPath = path.join(brandUploadsDir, filename);
         if (fs.existsSync(fullPath)) {
             fs.unlinkSync(fullPath);
         }

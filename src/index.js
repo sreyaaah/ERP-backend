@@ -9,8 +9,9 @@ import locationRoutes from "./routes/locationRoutes.js";
 import categoryRoutes from "./routes/categoryRoutes.js";
 import brandRoutes from "./routes/brandRoutes.js";
 
+import subcategoryRoutes from "./routes/subcategoryRoutes.js";
 
-dotenv.config(); // Load env variables
+dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -34,6 +35,8 @@ app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
 app.use("/api/customers", customerRoutes);
 app.use("/api/categories", categoryRoutes);
 app.use("/api/brand", brandRoutes);
+app.use("/api/subcategories", subcategoryRoutes);
+app.use("/api/categories/:categoryId/subcategories", subcategoryRoutes);
 app.use("/api/locations", locationRoutes);
 
 // Health check endpoint

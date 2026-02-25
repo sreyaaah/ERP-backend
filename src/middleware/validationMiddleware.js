@@ -184,3 +184,110 @@ export const validateBrandUpdate = (req, res, next) => {
     }
     next();
 };
+
+// Unit validation schemas
+const unitSchema = Joi.object({
+    name: Joi.string().min(2).max(50).required().messages({
+        "string.empty": "Unit name is required",
+        "string.min": "Unit name must be at least 2 characters",
+        "string.max": "Unit name cannot exceed 50 characters"
+    }),
+    shortName: Joi.string().required().messages({
+        "string.empty": "Short name is required"
+    }),
+    status: Joi.string().valid("Active", "Inactive").default("Active")
+});
+
+const unitUpdateSchema = Joi.object({
+    name: Joi.string().min(2).max(50).optional(),
+    shortName: Joi.string().optional(),
+    status: Joi.string().valid("Active", "Inactive").optional()
+});
+
+export const validateUnit = (req, res, next) => {
+    const { error } = unitSchema.validate(req.body, { abortEarly: false, allowUnknown: true });
+    if (error) {
+        return res.status(400).json({
+            message: "Validation failed",
+            status: false,
+            errors: error.details.reduce((acc, curr) => {
+                acc[curr.path[0]] = curr.message;
+                return acc;
+            }, {})
+        });
+    }
+    next();
+};
+
+export const validateUnitUpdate = (req, res, next) => {
+    const { error } = unitUpdateSchema.validate(req.body, { abortEarly: false, allowUnknown: true });
+    if (error) {
+        return res.status(400).json({
+            message: "Validation failed",
+            status: false,
+            errors: error.details.reduce((acc, curr) => {
+                acc[curr.path[0]] = curr.message;
+                return acc;
+            }, {})
+        });
+    }
+    next();
+};
+
+// Warranty validation schemas
+const warrantySchema = Joi.object({
+    name: Joi.string().min(2).max(100).required().messages({
+        "string.empty": "Warranty name is required",
+        "string.min": "Warranty name must be at least 2 characters",
+        "string.max": "Warranty name cannot exceed 100 characters"
+    }),
+    duration: Joi.number().integer().min(1).required().messages({
+        "number.base": "Duration must be a number",
+        "number.min": "Duration must be at least 1",
+        "any.required": "Duration is required"
+    }),
+    type: Joi.string().valid("Days", "Months", "Years").required().messages({
+        "any.only": "Type must be one of: Days, Months, Years",
+        "any.required": "Period type is required"
+    }),
+    description: Joi.string().allow("", null).optional(),
+    status: Joi.string().valid("Active", "Inactive").default("Active")
+});
+
+const warrantyUpdateSchema = Joi.object({
+    name: Joi.string().min(2).max(100).optional(),
+    duration: Joi.number().integer().min(1).optional(),
+    type: Joi.string().valid("Days", "Months", "Years").optional(),
+    description: Joi.string().allow("", null).optional(),
+    status: Joi.string().valid("Active", "Inactive").optional()
+});
+
+export const validateWarranty = (req, res, next) => {
+    const { error } = warrantySchema.validate(req.body, { abortEarly: false, allowUnknown: true });
+    if (error) {
+        return res.status(400).json({
+            message: "Validation failed",
+            status: false,
+            errors: error.details.reduce((acc, curr) => {
+                acc[curr.path[0]] = curr.message;
+                return acc;
+            }, {})
+        });
+    }
+    next();
+};
+
+export const validateWarrantyUpdate = (req, res, next) => {
+    const { error } = warrantyUpdateSchema.validate(req.body, { abortEarly: false, allowUnknown: true });
+    if (error) {
+        return res.status(400).json({
+            message: "Validation failed",
+            status: false,
+            errors: error.details.reduce((acc, curr) => {
+                acc[curr.path[0]] = curr.message;
+                return acc;
+            }, {})
+        });
+    }
+    next();
+};

@@ -219,15 +219,24 @@ export const exportCategories = async (req, res) => {
             const worksheet = workbook.addWorksheet('Categories');
 
             worksheet.columns = [
-                { header: 'ID', key: '_id', width: 25 },
+                { header: 'S.No', key: 'sno', width: 10 },
                 { header: 'Name', key: 'name', width: 25 },
                 { header: 'Slug', key: 'slug', width: 25 },
                 { header: 'Status', key: 'status', width: 15 },
                 { header: 'Created At', key: 'createdAt', width: 20 }
             ];
-            categories.forEach(category => {
-                worksheet.addRow(category);
+
+            categories.forEach((category, index) => {
+                worksheet.addRow({
+                    sno: index + 1,
+                    name: category.name,
+                    slug: category.slug,
+                    status: category.status,
+                    createdAt: category.createdAt ? new Date(category.createdAt).toLocaleDateString() : '-'
+                });
             });
+
+            worksheet.autoFilter = { from: "A1", to: "E1" };
 
             res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
             res.setHeader('Content-Disposition', 'attachment; filename=categories.xlsx');
@@ -249,10 +258,10 @@ export const exportCategories = async (req, res) => {
             // Table constants
             const tableTop = 100;
             const itemHeight = 30;
-            const col1 = 30; 
-            const col2 = 80;  
-            const col3 = 230; 
-            const col4 = 380; 
+            const col1 = 30;
+            const col2 = 80;
+            const col3 = 230;
+            const col4 = 380;
             const col5 = 460;
 
             let y = tableTop;

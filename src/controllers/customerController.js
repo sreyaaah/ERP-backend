@@ -19,7 +19,9 @@ export const getCustomers = async (req, res) => {
 
     const query = { isDeleted: { $ne: true } };
     if (search) {
-      const searchRegex = new RegExp(search, "i");
+      // Escape special characters for regex
+      const escapedSearch = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const searchRegex = new RegExp(escapedSearch, "i");
 
       // Find country codes matching search term to include in search
       const matchingCountries = await Country.find({

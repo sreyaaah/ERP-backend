@@ -236,14 +236,23 @@ export const exportBrands = async (req, res) => {
             const worksheet = workbook.addWorksheet('Brands');
 
             worksheet.columns = [
+                { header: 'S.No', key: 'sno', width: 10 },
                 { header: 'Name', key: 'name', width: 25 },
                 { header: 'Slug', key: 'slug', width: 25 },
                 { header: 'Status', key: 'status', width: 15 },
                 { header: 'Created At', key: 'createdAt', width: 20 }
             ];
-            brands.forEach(brand => {
-                worksheet.addRow(brand);
+            brands.forEach((brand, index) => {
+                worksheet.addRow({
+                    sno: index + 1,
+                    name: brand.name,
+                    slug: brand.slug,
+                    status: brand.status,
+                    createdAt: brand.createdAt ? new Date(brand.createdAt).toLocaleDateString() : '-'
+                });
             });
+
+            worksheet.autoFilter = { from: "A1", to: "E1" };
 
             res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
             res.setHeader('Content-Disposition', 'attachment; filename=brands.xlsx');

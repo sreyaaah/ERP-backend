@@ -10,6 +10,8 @@ import categoryRoutes from "./routes/categoryRoutes.js";
 import brandRoutes from "./routes/brandRoutes.js";
 
 import subcategoryRoutes from "./routes/subcategoryRoutes.js";
+import unitRoutes from "./routes/unitRoutes.js";
+import warrantyRoutes from "./routes/warrantyRoutes.js";
 
 dotenv.config();
 
@@ -38,6 +40,8 @@ app.use("/api/brand", brandRoutes);
 app.use("/api/subcategories", subcategoryRoutes);
 app.use("/api/categories/:categoryId/subcategories", subcategoryRoutes);
 app.use("/api/locations", locationRoutes);
+app.use("/api/units", unitRoutes);
+app.use("/api/warranties", warrantyRoutes);
 
 // Health check endpoint
 app.get("/api/health", (req, res) => {

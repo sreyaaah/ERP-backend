@@ -9,6 +9,7 @@ export const exportToExcel = async (customers) => {
 
     // Define columns
     worksheet.columns = [
+        { header: "S.No", key: "sno", width: 8 },
         { header: "Customer Code", key: "code", width: 15 },
         { header: "First Name", key: "firstName", width: 20 },
         { header: "Last Name", key: "lastName", width: 20 },
@@ -24,16 +25,17 @@ export const exportToExcel = async (customers) => {
         { header: "Created At", key: "createdAt", width: 20 }
     ];
 
-    worksheet.getRow(1).font = { bold: true, size: 12 };
-    worksheet.getRow(1).fill = {
+    const headerRow = worksheet.getRow(1);
+    headerRow.font = { bold: true, color: { argb: "FFFFFFFF" } };
+    headerRow.fill = {
         type: "pattern",
         pattern: "solid",
         fgColor: { argb: "FF4472C4" }
     };
-    worksheet.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
 
-    customers.forEach((customer) => {
+    customers.forEach((customer, index) => {
         worksheet.addRow({
+            sno: index + 1,
             code: customer.code,
             firstName: customer.firstName,
             lastName: customer.lastName,
@@ -46,13 +48,13 @@ export const exportToExcel = async (customers) => {
             postalCode: customer.postalCode || "",
             gstin: customer.gstin || "",
             status: customer.status,
-            createdAt: customer.createdAt ? new Date(customer.createdAt).toLocaleDateString() : ""
+            createdAt: customer.createdAt ? new Date(customer.createdAt).toLocaleDateString() : "-"
         });
     });
 
     worksheet.autoFilter = {
         from: "A1",
-        to: "M1"
+        to: "N1"
     }
 
     const buffer = await workbook.xlsx.writeBuffer();
@@ -66,7 +68,8 @@ export const exportToPDF = (customers) => {
             const doc = new PDFDocument({
                 size: "A4",
                 layout: "landscape",
-                margin: 50
+                margin: 50,
+                bufferPages: true
             });
 
             const chunks = [];
@@ -167,7 +170,8 @@ export const exportCustomerDetailsToPDF = (customer) => {
         try {
             const doc = new PDFDocument({
                 size: "A4",
-                margin: 50
+                margin: 50,
+                bufferPages: true
             });
 
             const chunks = [];

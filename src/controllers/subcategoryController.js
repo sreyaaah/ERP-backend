@@ -269,6 +269,8 @@ export const exportSubcategories = async (req, res) => {
             const worksheet = workbook.addWorksheet("Subcategories");
 
             worksheet.columns = [
+        
+                { header: "S.No", key: "sno", width: 10 },
                 { header: "Name", key: "name", width: 25 },
                 { header: "Slug", key: "slug", width: 25 },
                 { header: "Category", key: "categoryName", width: 25 },
@@ -280,8 +282,9 @@ export const exportSubcategories = async (req, res) => {
             headerRow.font = { bold: true, color: { argb: "FFFFFFFF" } };
             headerRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4472C4" } };
 
-            subcategories.forEach(sub => {
+            subcategories.forEach((sub, index) => {
                 worksheet.addRow({
+                    sno: index + 1,
                     name: sub.name,
                     slug: sub.slug,
                     categoryName: sub.categoryId?.name || "-",
@@ -290,7 +293,7 @@ export const exportSubcategories = async (req, res) => {
                 });
             });
 
-            worksheet.autoFilter = { from: "A1", to: "E1" };
+            worksheet.autoFilter = { from: "A1", to: "F1" };
 
             res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
             res.setHeader("Content-Disposition", "attachment; filename=subcategories.xlsx");

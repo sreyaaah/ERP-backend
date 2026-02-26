@@ -17,6 +17,16 @@ if (!fs.existsSync(brandUploadsDir)) {
     fs.mkdirSync(brandUploadsDir, { recursive: true });
 }
 
+const productUploadsDir = path.join(__dirname, "../../uploads/products");
+if (!fs.existsSync(productUploadsDir)) {
+    fs.mkdirSync(productUploadsDir, { recursive: true });
+}
+
+const csvUploadsDir = path.join(__dirname, "../../uploads/csv");
+if (!fs.existsSync(csvUploadsDir)) {
+    fs.mkdirSync(csvUploadsDir, { recursive: true });
+}
+
 // Configure storage for customers
 const customerStorage = multer.diskStorage({
     destination: (req, file, cb) => {
@@ -74,6 +84,46 @@ export const uploadBrandImage = multer({
     fileFilter: fileFilter
 });
 
+// Product image storage & uploader 
+const productStorage = multer.diskStorage({
+    destination: (req, file, cb) => { cb(null, productUploadsDir); },
+    filename: (req, file, cb) => {
+        const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+        const ext = path.extname(file.originalname);
+        const name = path.basename(file.originalname, ext);
+        cb(null, `${name}-${uniqueSuffix}${ext}`);
+    }
+});
+
+export const uploadProductImage = multer({
+    storage: productStorage,
+    limits: { fileSize: 5 * 1024 * 1024 },
+    fileFilter: fileFilter
+});
+
+// CSV storage & uploader 
+const csvStorage = multer.diskStorage({
+    destination: (req, file, cb) => { cb(null, csvUploadsDir); },
+    filename: (req, file, cb) => {
+        const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+        cb(null, `import-${uniqueSuffix}.csv`);
+    }
+});
+
+const csvFileFilter = (req, file, cb) => {
+    if (file.mimetype === "text/csv" || file.originalname.toLowerCase().endsWith(".csv")) {
+        cb(null, true);
+    } else {
+        cb(new Error("Only CSV files are allowed"));
+    }
+};
+
+export const uploadCsv = multer({
+    storage: csvStorage,
+    limits: { fileSize: 10 * 1024 * 1024 },
+    fileFilter: csvFileFilter
+});
+
 // Helper function to delete old image
 export const deleteCustomerImage = (filename) => {
     try {
@@ -96,3 +146,15 @@ export const deleteBrandImage = (filename) => {
         // Silent fail
     }
 };
+
+export const deleteProductImage = (filename) => {
+    try {
+        const fullPath = path.join(productUploadsDir, filename);
+        if (fs.existsSync(fullPath)) {
+            fs.unlinkSync(fullPath);
+        }
+    } catch (error) {
+        // Silent fail
+    }
+};
+

@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
-    "seed:locations": "node src/scripts/seedLocations.js"
+    "seed:locations": "node src/scripts/seedLocations.js",
+    "seed:products": "node src/scripts/seedProductData.js"
   },
   "dependencies": {
     "cors": "^2.8.6",

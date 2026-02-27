@@ -14,6 +14,7 @@ import unitRoutes from "./routes/unitRoutes.js";
 import warrantyRoutes from "./routes/warrantyRoutes.js";
 import productRoutes from "./routes/productRoutes.js";
 import dropdownRoutes from "./routes/dropdownRoutes.js";
+import quotationRoutes from "./routes/quotationRoutes.js";
 
 dotenv.config();
 
@@ -47,8 +48,10 @@ app.use("/api/warranties", warrantyRoutes);
 // Product module
 app.use("/api/products", productRoutes);
 
-// Dropdown data for product form
+// Quotation module
+app.use("/api/quotations", quotationRoutes);
 
+// Dropdown data for product form
 app.use("/api", dropdownRoutes);
 
 // Health check endpoint

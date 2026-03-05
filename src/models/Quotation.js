@@ -36,6 +36,12 @@ const quotationSchema = new mongoose.Schema(
             enum: ["Pending", "Sent", "Ordered", "Converted"],
             default: "Pending"
         },
+        paymentStatus: {
+            type: String,
+            enum: ["Paid", "Unpaid", "Partially Paid"],
+            default: "Unpaid"
+        },
+        paidAmount: { type: Number, default: 0 },
         convertedToSalesOrderId: { type: mongoose.Schema.Types.ObjectId, default: null }
     },
     { timestamps: true }

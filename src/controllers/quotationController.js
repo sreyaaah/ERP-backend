@@ -1,6 +1,7 @@
 import Quotation from "../models/Quotation.js";
 import Customer from "../models/Customer.js";
 import Product from "../models/Product.js";
+import Invoice from "../models/Invoice.js";
 import PDFDocument from "pdfkit";
 import ExcelJS from "exceljs";
 
@@ -78,6 +79,8 @@ const formatQuotation = (q, customer, productMap) => ({
     amountInWords: q.amountInWords,
     description: q.description,
     status: q.status,
+    paymentStatus: q.paymentStatus || "Unpaid",
+    paidAmount: q.paidAmount || 0,
     convertedToSalesOrderId: q.convertedToSalesOrderId,
     createdAt: q.createdAt,
     updatedAt: q.updatedAt
@@ -162,7 +165,8 @@ export const createQuotation = async (req, res) => {
     try {
         const {
             customerId, date, validity, reference,
-            quotationType, description, status, items = []
+            quotationType, description, status, items = [],
+            paymentStatus, paidAmount
         } = req.body;
 
         if (!customerId) return res.status(400).json({ message: "Customer is required", status: false });
@@ -206,7 +210,9 @@ export const createQuotation = async (req, res) => {
             grandTotal,
             amountInWords,
             description: description || "",
-            status: status || "Pending"
+            status: status || "Pending",
+            paymentStatus: paymentStatus || "Unpaid",
+            paidAmount: paidAmount || 0
         });
 
         return res.status(201).json({
@@ -251,7 +257,8 @@ export const updateQuotation = async (req, res) => {
 
         const {
             customerId, date, validity, reference,
-            quotationType, description, status, items
+            quotationType, description, status, items,
+            paymentStatus, paidAmount
         } = req.body;
 
         if (customerId) {
@@ -266,6 +273,8 @@ export const updateQuotation = async (req, res) => {
         if (quotationType) quotation.quotationType = quotationType;
         if (description !== undefined) quotation.description = description;
         if (status) quotation.status = status;
+        if (paymentStatus) quotation.paymentStatus = paymentStatus;
+        if (paidAmount !== undefined) quotation.paidAmount = paidAmount;
 
         if (items && items.length > 0) {
             const { items: computedItems, subtotal, grandTotal } = computeTotals(items);
@@ -662,26 +671,79 @@ export const generateQuotationNumber = async (req, res) => {
 export const convertQuotationToInvoice = async (req, res) => {
     try {
         const quotation = await Quotation.findById(req.params.id);
-        if (!quotation) return res.status(404).json({ message: "Quotation not found", status: false, dataFound: false });
+        if (!quotation) {
+            return res.status(404).json({ message: "Quotation not found", status: false });
+        }
 
         if (quotation.status === "Converted") {
             return res.status(400).json({ message: "Quotation has already been converted", status: false });
         }
 
-        // Mark as converted — Sales Order / Invoice creation can be wired here when that module exists
-        quotation.status = "Converted";
-        // Placeholder: future SalesOrder model can be created here and its ID stored
-        const salesOrderId = null; // Replace with actual SalesOrder._id when implemented
+        // 1. Generate Invoice Number (INV-YYYYMMDD-XXXX)
+        const today = new Date();
+        const datePart = today.toISOString().slice(0, 10).replace(/-/g, "");
+        const prefix = `INV-${datePart}-`;
 
-        quotation.convertedToSalesOrderId = salesOrderId;
+        const lastInv = await Invoice.findOne(
+            { invoiceNumber: { $regex: `^${prefix}` } }
+        ).sort({ invoiceNumber: -1 }).lean();
+
+        let seq = 1;
+        if (lastInv) {
+            const parts = lastInv.invoiceNumber.split("-");
+            const lastSeq = parseInt(parts[parts.length - 1], 10);
+            if (!isNaN(lastSeq)) seq = lastSeq + 1;
+        }
+        const invoiceNumber = `${prefix}${String(seq).padStart(4, "0")}`;
+
+        // 2. Map Items
+        const productIds = quotation.items.map(i => i.productId);
+        const products = await Product.find({ _id: { $in: productIds } }).select("_id product");
+        const productMap = products.reduce((acc, p) => { acc[p._id.toString()] = p.product; return acc; }, {});
+
+        const invoiceItems = quotation.items.map(item => {
+            const discAmt = (item.rate * item.qty * item.discountPercent / 100);
+            return {
+                productId: item.productId,
+                productName: productMap[item.productId.toString()] || "Unknown Product",
+                quantity: item.qty,
+                rate: item.rate,
+                discount: +discAmt.toFixed(2),
+                taxPercent: item.taxPercent,
+                amount: item.totalCost
+            };
+        });
+
+        // 3. Create Invoice
+        const invoice = await Invoice.create({
+            invoiceNumber,
+            invoiceType: quotation.quotationType || "Intrastate",
+            customerId: quotation.customerId,
+            invoiceDate: today,
+            dueDate: quotation.validity || new Date(today.getTime() + 7 * 24 * 60 * 60 * 1000),
+            paymentStatus: quotation.paymentStatus || "Unpaid",
+            paidAmount: quotation.paidAmount || 0,
+            items: invoiceItems,
+            subtotal: quotation.subtotal,
+            taxAmount: +(quotation.grandTotal - quotation.subtotal).toFixed(2),
+            grandTotal: quotation.grandTotal,
+            notes: `Converted from Quotation: ${quotation.quotationNo}`,
+            terms: quotation.description
+        });
+
+        // 4. Update Quotation
+        quotation.status = "Converted";
+        quotation.convertedToSalesOrderId = invoice._id;
         await quotation.save();
 
         return res.status(200).json({
-            message: "Quotation Converted Successfully",
-            salesOrderId,
-            status: true
+            message: "Quotation Converted to Invoice Successfully",
+            status: true,
+            invoiceId: invoice._id,
+            invoiceNumber: invoice.invoiceNumber
         });
     } catch (error) {
+        console.error("Conversion Error:", error);
         res.status(500).json({ message: error.message, status: false });
     }
 };

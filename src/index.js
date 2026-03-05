@@ -15,6 +15,7 @@ import warrantyRoutes from "./routes/warrantyRoutes.js";
 import productRoutes from "./routes/productRoutes.js";
 import dropdownRoutes from "./routes/dropdownRoutes.js";
 import quotationRoutes from "./routes/quotationRoutes.js";
+import invoiceRoutes from "./routes/invoiceRoutes.js";
 
 dotenv.config();
 
@@ -50,6 +51,9 @@ app.use("/api/products", productRoutes);
 
 // Quotation module
 app.use("/api/quotations", quotationRoutes);
+
+// Invoice module
+app.use("/api/invoices", invoiceRoutes);
 
 // Dropdown data for product form
 app.use("/api", dropdownRoutes);

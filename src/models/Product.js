@@ -12,7 +12,7 @@ const productSchema = new mongoose.Schema({
     slug: { type: String, required: true, unique: true, trim: true, lowercase: true },
     sku: { type: String, required: true, unique: true, trim: true, uppercase: true },
     itemCode: { type: String, trim: true, default: "" },
-    sellingType: { type: String, enum: ["Transactional", "Solution", "Subscription"], default: "Transactional" },
+    sellingType: { type: mongoose.Schema.Types.ObjectId, ref: "SellingType", default: null },
     categoryId: { type: mongoose.Schema.Types.ObjectId, ref: "Category", default: null },
     subCategoryId: { type: mongoose.Schema.Types.ObjectId, ref: "Subcategory", default: null },
     brandId: { type: mongoose.Schema.Types.ObjectId, ref: "Brand", default: null },

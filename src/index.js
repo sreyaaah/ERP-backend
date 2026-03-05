@@ -16,9 +16,6 @@ import productRoutes from "./routes/productRoutes.js";
 import dropdownRoutes from "./routes/dropdownRoutes.js";
 import quotationRoutes from "./routes/quotationRoutes.js";
 import invoiceRoutes from "./routes/invoiceRoutes.js";
-import bankAccountRoutes from "./routes/bankAccountRoutes.js";
-import taxRoutes from "./routes/taxRoutes.js";
-import currencyRoutes from "./routes/currencyRoutes.js";
 
 dotenv.config();
 
@@ -57,15 +54,6 @@ app.use("/api/quotations", quotationRoutes);
 
 // Invoice module
 app.use("/api/invoices", invoiceRoutes);
-
-// Bank account module
-app.use("/api/bank-accounts", bankAccountRoutes);
-
-// Tax module
-app.use("/api/taxes", taxRoutes);
-
-// Currency module
-app.use("/api/currencies", currencyRoutes);
 
 // Dropdown data for product form
 app.use("/api", dropdownRoutes);

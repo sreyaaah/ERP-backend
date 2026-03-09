@@ -7,6 +7,7 @@ const quotationItemSchema = new mongoose.Schema(
         rate: { type: Number, required: true, min: 0 },
         discountPercent: { type: Number, default: 0, min: 0, max: 100 },
         taxPercent: { type: Number, default: 0, min: 0 },
+        hsnSac: { type: String, default: "" },
         taxAmount: { type: Number, default: 0 },
         unitCost: { type: Number, default: 0 },
         totalCost: { type: Number, default: 0 }

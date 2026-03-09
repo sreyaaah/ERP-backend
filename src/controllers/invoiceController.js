@@ -147,6 +147,7 @@ export const getInvoiceById = async (req, res) => {
                 rate: item.rate,
                 discount: item.discount,
                 taxPercent: item.taxPercent,
+                hsnSac: item.hsnSac,
                 amount: item.amount
             })),
             subtotal: inv.subtotal,
@@ -176,15 +177,18 @@ export const createInvoice = async (req, res) => {
 
         // Auto-gen number if not provided
         const today = new Date();
-        const datePart = today.toISOString().slice(0, 10).replace(/-/g, "");
-        const prefix = `INV-${datePart}-`;
-        const lastInv = await Invoice.findOne({ invoiceNumber: { $regex: `^${prefix}` } }).sort({ invoiceNumber: -1 });
+        const monthName = today.toLocaleString('en-US', { month: 'long' });
+        const year = today.getFullYear();
+        const nextYear = year + 1;
+        const suffix = `_${monthName}_${year}_${nextYear}`;
+
+        const lastInv = await Invoice.findOne({ invoiceNumber: { $regex: `${suffix}$` } }).sort({ invoiceNumber: -1 });
         let seq = 1;
         if (lastInv) {
-            const lastSeq = parseInt(lastInv.invoiceNumber.split('-').pop(), 10);
-            if (!isNaN(lastSeq)) seq = lastSeq + 1;
+            const match = lastInv.invoiceNumber.match(/^(\d+)_/);
+            if (match) seq = parseInt(match[1], 10) + 1;
         }
-        const invoiceNumber = `${prefix}${String(seq).padStart(4, "0")}`;
+        const invoiceNumber = `${String(seq).padStart(4, "0")}${suffix}`;
 
         const newInvoice = await Invoice.create({
             invoiceNumber,
@@ -263,15 +267,18 @@ export const deleteInvoice = async (req, res) => {
 export const generateInvoiceNumber = async (req, res) => {
     try {
         const today = new Date();
-        const datePart = today.toISOString().slice(0, 10).replace(/-/g, "");
-        const prefix = `INV-${datePart}-`;
-        const lastInv = await Invoice.findOne({ invoiceNumber: { $regex: `^${prefix}` } }).sort({ invoiceNumber: -1 });
+        const monthName = today.toLocaleString('en-US', { month: 'long' });
+        const year = today.getFullYear();
+        const nextYear = year + 1;
+        const suffix = `_${monthName}_${year}_${nextYear}`;
+
+        const lastInv = await Invoice.findOne({ invoiceNumber: { $regex: `${suffix}$` } }).sort({ invoiceNumber: -1 });
         let seq = 1;
         if (lastInv) {
-            const lastSeq = parseInt(lastInv.invoiceNumber.split('-').pop(), 10);
-            if (!isNaN(lastSeq)) seq = lastSeq + 1;
+            const match = lastInv.invoiceNumber.match(/^(\d+)_/);
+            if (match) seq = parseInt(match[1], 10) + 1;
         }
-        const invoiceNumber = `${prefix}${String(seq).padStart(4, "0")}`;
+        const invoiceNumber = `${String(seq).padStart(4, "0")}${suffix}`;
 
         return res.status(200).json({
             status: true,

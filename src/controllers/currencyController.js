@@ -13,7 +13,27 @@ export const getCurrencies = async (req, res) => {
             ];
         }
 
-        const currencies = await Currency.find(query).sort({ createdAt: -1 });
+        const currencies = await Currency.find(query);
+
+        // Custom sorting priority
+        const PRIORITY_ORDER = ['INR', 'USD', 'AUD', 'EUR', 'AED', 'SAR', 'QAR', 'OMR', 'BHD', 'KWD'];
+        
+        currencies.sort((a, b) => {
+            const codeA = (a.code || "").toUpperCase();
+            const codeB = (b.code || "").toUpperCase();
+            
+            const indexA = PRIORITY_ORDER.indexOf(codeA);
+            const indexB = PRIORITY_ORDER.indexOf(codeB);
+            
+            const priorityA = indexA === -1 ? 999 : indexA;
+            const priorityB = indexB === -1 ? 999 : indexB;
+            
+            if (priorityA !== priorityB) {
+                return priorityA - priorityB;
+            }
+            
+            return (a.name || "").localeCompare(b.name || "");
+        });
 
         return res.status(200).json({
             status: true,

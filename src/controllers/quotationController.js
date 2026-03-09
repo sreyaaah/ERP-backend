@@ -70,6 +70,7 @@ const formatQuotation = (q, customer, productMap) => ({
         rate: item.rate,
         discountPercent: item.discountPercent,
         taxPercent: item.taxPercent,
+        hsnSac: item.hsnSac,
         taxAmount: item.taxAmount,
         unitCost: item.unitCost,
         totalCost: item.totalCost
@@ -177,23 +178,24 @@ export const createQuotation = async (req, res) => {
         const customer = await Customer.findById(customerId);
         if (!customer) return res.status(404).json({ message: "Customer not found", status: false });
 
-        // Auto-generate quotation number: QT-YYYYMMDD-XXXX
-        // Use the highest existing number for today's prefix to avoid duplicates after deletions
+        // Auto-generate quotation number: Quote_0001_Month_Year
         const today = new Date();
-        const datePart = today.toISOString().slice(0, 10).replace(/-/g, "");
-        const prefix = `QT-${datePart}-`;
+        const monthName = today.toLocaleString('en-US', { month: 'long' });
+        const year = today.getFullYear();
+        const suffix = `_${monthName}_${year}`;
+        const prefix = `Quote_`;
 
         const lastQ = await Quotation.findOne(
-            { quotationNo: { $regex: `^${prefix}` } },
+            { quotationNo: { $regex: `${suffix}$` } },
             { quotationNo: 1 }
         ).sort({ quotationNo: -1 }).lean();
 
         let seq = 1;
         if (lastQ) {
-            const lastSeq = parseInt(lastQ.quotationNo.replace(prefix, ""), 10);
-            if (!isNaN(lastSeq)) seq = lastSeq + 1;
+            const match = lastQ.quotationNo.match(/Quote_(\d+)_/);
+            if (match) seq = parseInt(match[1], 10) + 1;
         }
-        const quotationNo = `${prefix}${String(seq).padStart(4, "0")}`;
+        const quotationNo = `${prefix}${String(seq).padStart(4, "0")}${suffix}`;
 
         const { items: computedItems, subtotal, grandTotal } = computeTotals(items);
         const amountInWords = numberToWords(grandTotal);
@@ -642,20 +644,22 @@ export const exportQuotationsXlsx = async (req, res) => {
 export const generateQuotationNumber = async (req, res) => {
     try {
         const today = new Date();
-        const datePart = today.toISOString().slice(0, 10).replace(/-/g, "");
-        const prefix = `QT-${datePart}-`;
+        const monthName = today.toLocaleString('en-US', { month: 'long' });
+        const year = today.getFullYear();
+        const suffix = `_${monthName}_${year}`;
+        const prefix = `Quote_`;
 
         const lastQ = await Quotation.findOne(
-            { quotationNo: { $regex: `^${prefix}` } },
+            { quotationNo: { $regex: `${suffix}$` } },
             { quotationNo: 1 }
         ).sort({ quotationNo: -1 }).lean();
 
         let seq = 1;
         if (lastQ) {
-            const lastSeq = parseInt(lastQ.quotationNo.replace(prefix, ""), 10);
-            if (!isNaN(lastSeq)) seq = lastSeq + 1;
+            const match = lastQ.quotationNo.match(/Quote_(\d+)_/);
+            if (match) seq = parseInt(match[1], 10) + 1;
         }
-        const quotationNo = `${prefix}${String(seq).padStart(4, "0")}`;
+        const quotationNo = `${prefix}${String(seq).padStart(4, "0")}${suffix}`;
 
         return res.status(200).json({
             message: "Quotation Number Generated Successfully",
@@ -679,22 +683,23 @@ export const convertQuotationToInvoice = async (req, res) => {
             return res.status(400).json({ message: "Quotation has already been converted", status: false });
         }
 
-        // 1. Generate Invoice Number (INV-YYYYMMDD-XXXX)
+        // 1. Generate Invoice Number (0001_month_year_nextyear)
         const today = new Date();
-        const datePart = today.toISOString().slice(0, 10).replace(/-/g, "");
-        const prefix = `INV-${datePart}-`;
+        const monthName = today.toLocaleString('en-US', { month: 'long' });
+        const year = today.getFullYear();
+        const nextYear = year + 1;
+        const suffix = `_${monthName}_${year}_${nextYear}`;
 
         const lastInv = await Invoice.findOne(
-            { invoiceNumber: { $regex: `^${prefix}` } }
+            { invoiceNumber: { $regex: `${suffix}$` } }
         ).sort({ invoiceNumber: -1 }).lean();
 
         let seq = 1;
         if (lastInv) {
-            const parts = lastInv.invoiceNumber.split("-");
-            const lastSeq = parseInt(parts[parts.length - 1], 10);
-            if (!isNaN(lastSeq)) seq = lastSeq + 1;
+            const match = lastInv.invoiceNumber.match(/^(\d+)_/);
+            if (match) seq = parseInt(match[1], 10) + 1;
         }
-        const invoiceNumber = `${prefix}${String(seq).padStart(4, "0")}`;
+        const invoiceNumber = `${String(seq).padStart(4, "0")}${suffix}`;
 
         // 2. Map Items
         const productIds = quotation.items.map(i => i.productId);

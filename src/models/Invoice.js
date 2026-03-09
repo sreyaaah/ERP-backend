@@ -8,6 +8,7 @@ const invoiceItemSchema = new mongoose.Schema(
         rate: { type: Number, required: true, min: 0 },
         discount: { type: Number, default: 0, min: 0 },
         taxPercent: { type: Number, default: 0, min: 0 },
+        hsnSac: { type: String, default: "" },
         amount: { type: Number, default: 0 }
     },
     { _id: true }

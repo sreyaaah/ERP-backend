@@ -20,6 +20,7 @@ const fmtList = (p) => ({
     id: p._id,
     sku: p.sku,
     product: p.product,
+    itemCode: p.itemCode || "",
     productImage: p.images && p.images.length > 0 ? p.images[0].url : "",
     category: p.categoryId?.name || "",
     brand: p.brandId?.name || "",
@@ -183,7 +184,7 @@ export const createProduct = async (req, res) => {
             slug: slug.toLowerCase(),
             sku: sku.toUpperCase(),
             itemCode: itemCode || "",
-            sellingType: sellingType || "Transactional",
+            sellingType: sellingType || null,
             categoryId: categoryId || null,
             subCategoryId: subCategoryId || null,
             brandId: brandId || null,
@@ -473,32 +474,23 @@ export const checkSku = async (req, res) => {
 // GENERATE SKU  GET /api/products/generate-sku 
 export const generateSku = async (req, res) => {
     try {
-        let sku, unique = false, attempts = 0;
-        while (!unique && attempts < 100) {
-            sku = `PRD${Math.floor(1000000 + Math.random() * 9000000)}`;
-            if (!(await Product.findOne({ sku }).select("_id"))) unique = true;
-            attempts++;
+        const lastProduct = await Product.findOne({ sku: /^PRD-/ }).sort({ sku: -1 });
+        let newNum = 1;
+        if (lastProduct && lastProduct.sku) {
+            const parts = lastProduct.sku.split("-");
+            if (parts.length > 1) {
+                const lastNum = parseInt(parts[1]);
+                if (!isNaN(lastNum)) newNum = lastNum + 1;
+            }
         }
-        if (!unique) return res.status(500).json({ message: "Could not generate a unique SKU. Please try again.", status: false });
+        const sku = `PRD-${String(newNum).padStart(6, "0")}`;
         res.status(200).json({ status: true, sku });
     } catch (error) {
         res.status(500).json({ message: error.message, status: false });
     }
 };
 
-// GENERATE ITEM CODE  GET /api/products/generate-item-code 
-export const generateItemCode = async (req, res) => {
-    try {
-        let itemCode, unique = false;
-        while (!unique) {
-            itemCode = `ITEM${Math.floor(10000 + Math.random() * 90000)}`;
-            if (!(await Product.findOne({ itemCode }).select("_id"))) unique = true;
-        }
-        res.status(200).json({ status: true, itemCode });
-    } catch (error) {
-        res.status(500).json({ message: error.message, status: false });
-    }
-};
+
 
 //  EXPORT  GET /api/products/export?format=xlsx|pdf&id=... 
 export const exportProducts = async (req, res) => {
@@ -698,7 +690,7 @@ export const importProducts = async (req, res) => {
                     slug,
                     sku: row.sku.toUpperCase(),
                     itemCode: row.itemCode || "",
-                    sellingType: row.sellingType || "Transactional",
+                    sellingType: row.sellingType || null,
                     categoryId: row.categoryId || null,
                     subCategoryId: row.subCategoryId || null,
                     brandId: row.brandId || null,

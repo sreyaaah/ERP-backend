@@ -15,7 +15,6 @@ import {
     saveCustomFields,
     checkSku,
     generateSku,
-    generateItemCode,
     exportProducts,
     downloadSampleCsv,
     importProducts
@@ -32,7 +31,7 @@ router.use(protect);
 // Utility  
 router.get("/check-sku", checkSku);
 router.get("/generate-sku", generateSku);
-router.get("/generate-item-code", generateItemCode);
+
 router.get("/export", exportProducts);
 router.get("/import/sample", downloadSampleCsv);
 router.post("/import", uploadCsv.single("file"), importProducts);

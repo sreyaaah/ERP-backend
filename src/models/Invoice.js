@@ -16,10 +16,16 @@ const invoiceItemSchema = new mongoose.Schema(
 
 const invoiceSchema = new mongoose.Schema(
     {
+        type: {
+            type: String,
+            enum: ["Invoice", "Sale"],
+            default: "Invoice"
+        },
         invoiceNumber: { type: String, required: true, unique: true, trim: true },
+        saleNumber: { type: String, unique: true, trim: true },
         invoiceType: {
             type: String,
-            enum: ["Intrastate", "Interstate", "International"],
+            enum: ["Intrastate", "Interstate", "International", "Standard"],
             default: "Intrastate"
         },
         customerId: { type: mongoose.Schema.Types.ObjectId, ref: "Customer", required: true },

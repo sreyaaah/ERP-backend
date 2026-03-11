@@ -1,6 +1,7 @@
 import Invoice from "../models/Invoice.js";
 import Customer from "../models/Customer.js";
 import Product from "../models/Product.js";
+import Counter from "../models/Counter.js";
 import PDFDocument from "pdfkit";
 import ExcelJS from "exceljs";
 
@@ -41,9 +42,16 @@ const computeTotals = (items) => {
 // 1. GET /api/invoices
 export const getInvoices = async (req, res) => {
     try {
-        const { page = 1, limit = 10, search, status, customerId, sortBy } = req.query;
+        const { page = 1, limit = 10, search, status, customerId, sortBy, type } = req.query;
         const query = {};
 
+        if (type) {
+            if (type === "Invoice") {
+                query.$or = [{ type: "Invoice" }, { type: { $exists: false } }];
+            } else {
+                query.type = type;
+            }
+        }
         if (status) query.paymentStatus = status;
         if (customerId) query.customerId = customerId;
         if (search) {
@@ -96,6 +104,7 @@ export const getInvoices = async (req, res) => {
         const formattedData = invoices.map(inv => ({
             invoiceId: inv._id,
             invoiceNumber: inv.invoiceNumber,
+            saleNumber: inv.saleNumber || inv.invoiceNumber,
             customerName: inv.customerName || (inv.customerId ? `${inv.customerId.firstName} ${inv.customerId.lastName}`.trim() : "Walk-in Customer"),
             invoiceDate: inv.invoiceDate.toISOString().split('T')[0],
             dueDate: inv.dueDate.toISOString().split('T')[0],
@@ -128,6 +137,7 @@ export const getInvoiceById = async (req, res) => {
         const data = {
             invoiceId: inv._id,
             invoiceNumber: inv.invoiceNumber,
+            saleNumber: inv.saleNumber || inv.invoiceNumber,
             invoiceType: inv.invoiceType,
             customer: {
                 customerId: inv.customerId?._id,
@@ -168,7 +178,7 @@ export const getInvoiceById = async (req, res) => {
 export const createInvoice = async (req, res) => {
     try {
         const {
-            invoiceType, customerId,
+            type, invoiceType, customerId,
             customerName, customerEmail, customerPhone, customerAddress, customerGstin,
             invoiceDate, dueDate, paymentStatus, paidAmount, items, notes, terms
         } = req.body;
@@ -176,23 +186,41 @@ export const createInvoice = async (req, res) => {
         const totals = computeTotals(items);
 
         // Auto-gen number if not provided
+        const prefix = type === "Sale" ? "SALE" : "";
         const today = new Date();
         const monthName = today.toLocaleString('en-US', { month: 'long' });
         const year = today.getFullYear();
         const nextYear = year + 1;
-        const suffix = `_${monthName}_${year}_${nextYear}`;
+        const suffix = type === "Sale" ? "" : `_${monthName}_${year}_${nextYear}`;
 
-        const lastInv = await Invoice.findOne({ invoiceNumber: { $regex: `${suffix}$` } }).sort({ invoiceNumber: -1 });
-        let seq = 1;
-        if (lastInv) {
-            const match = lastInv.invoiceNumber.match(/^(\d+)_/);
-            if (match) seq = parseInt(match[1], 10) + 1;
+        // 1. Calculate the date-based Invoice Number (for Invoices only)
+        let dateBasedInvoiceNumber = "";
+        if (type !== "Sale") {
+            const lastInv = await Invoice.findOne({ invoiceNumber: { $regex: `${suffix}$` } }).sort({ invoiceNumber: -1 });
+            let iSeq = 1;
+            if (lastInv) {
+                const match = lastInv.invoiceNumber.match(/^(\d+)_/);
+                if (match) iSeq = parseInt(match[1], 10) + 1;
+            }
+            dateBasedInvoiceNumber = `${String(iSeq).padStart(4, "0")}${suffix}`;
         }
-        const invoiceNumber = `${String(seq).padStart(4, "0")}${suffix}`;
+
+        // 2. GLOBAL SALE NUMBER (SALE####) - Forever Sequential (Never reuses deleted numbers)
+        const counterRecord = await Counter.findOneAndUpdate(
+            { id: "saleNumber" },
+            { $inc: { seq: 1 } },
+            { upsert: true, new: true }
+        );
+        const saleNumber = `SALE${String(counterRecord.seq).padStart(4, "0")}`;
+
+        // 3. Final Assignments
+        const finalInvoiceNumber = type === "Sale" ? saleNumber : dateBasedInvoiceNumber;
 
         const newInvoice = await Invoice.create({
-            invoiceNumber,
-            invoiceType: invoiceType || "Intrastate",
+            type: type || "Invoice",
+            invoiceNumber: finalInvoiceNumber,
+            saleNumber: saleNumber,
+            invoiceType: invoiceType || (type === "Sale" ? "Standard" : "Intrastate"),
             customerId,
             customerName,
             customerEmail,
@@ -266,23 +294,36 @@ export const deleteInvoice = async (req, res) => {
 // 6. GET /api/invoices/generate-number
 export const generateInvoiceNumber = async (req, res) => {
     try {
+        const { type = "Invoice" } = req.query;
+        const prefix = type === "Sale" ? "SALE" : "";
         const today = new Date();
         const monthName = today.toLocaleString('en-US', { month: 'long' });
         const year = today.getFullYear();
         const nextYear = year + 1;
         const suffix = `_${monthName}_${year}_${nextYear}`;
+        // Get the global SALE#### sequence (Forever Sequential)
+        // Here we do NOT increment it because this is just a preview/generator call
+        const counterRecord = await Counter.findOne({ id: "saleNumber" });
+        const currentSeq = counterRecord ? counterRecord.seq : 0;
+        const saleNumber = `SALE${String(currentSeq + 1).padStart(4, "0")}`;
 
-        const lastInv = await Invoice.findOne({ invoiceNumber: { $regex: `${suffix}$` } }).sort({ invoiceNumber: -1 });
-        let seq = 1;
-        if (lastInv) {
-            const match = lastInv.invoiceNumber.match(/^(\d+)_/);
-            if (match) seq = parseInt(match[1], 10) + 1;
+        let invoiceNumberResult;
+        if (type === "Sale") {
+            invoiceNumberResult = saleNumber;
+        } else {
+            // For Invoices, keep the separate date-based counter for the invoiceNumber itself
+            const lastInv = await Invoice.findOne({ invoiceNumber: { $regex: `${suffix}$` } }).sort({ invoiceNumber: -1 });
+            let iSeq = 1;
+            if (lastInv) {
+                const match = lastInv.invoiceNumber.match(/^(\d+)_/);
+                if (match) iSeq = parseInt(match[1], 10) + 1;
+            }
+            invoiceNumberResult = `${String(iSeq).padStart(4, "0")}${suffix}`;
         }
-        const invoiceNumber = `${String(seq).padStart(4, "0")}${suffix}`;
 
         return res.status(200).json({
             status: true,
-            invoiceNumber
+            invoiceNumber: invoiceNumberResult
         });
     } catch (error) {
         res.status(500).json({ status: false, message: error.message });

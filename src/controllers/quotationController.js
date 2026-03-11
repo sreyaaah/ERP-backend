@@ -2,6 +2,7 @@ import Quotation from "../models/Quotation.js";
 import Customer from "../models/Customer.js";
 import Product from "../models/Product.js";
 import Invoice from "../models/Invoice.js";
+import Counter from "../models/Counter.js";
 import PDFDocument from "pdfkit";
 import ExcelJS from "exceljs";
 
@@ -683,23 +684,28 @@ export const convertQuotationToInvoice = async (req, res) => {
             return res.status(400).json({ message: "Quotation has already been converted", status: false });
         }
 
-        // 1. Generate Invoice Number (0001_month_year_nextyear)
+        // 1. Generate Numbers (####_month_year_nextyear and SALE####)
         const today = new Date();
         const monthName = today.toLocaleString('en-US', { month: 'long' });
         const year = today.getFullYear();
         const nextYear = year + 1;
         const suffix = `_${monthName}_${year}_${nextYear}`;
 
-        const lastInv = await Invoice.findOne(
-            { invoiceNumber: { $regex: `${suffix}$` } }
-        ).sort({ invoiceNumber: -1 }).lean();
-
+        const lastInv = await Invoice.findOne({ invoiceNumber: { $regex: `${suffix}$` } }).sort({ invoiceNumber: -1 });
         let seq = 1;
         if (lastInv) {
             const match = lastInv.invoiceNumber.match(/^(\d+)_/);
             if (match) seq = parseInt(match[1], 10) + 1;
         }
         const invoiceNumber = `${String(seq).padStart(4, "0")}${suffix}`;
+
+        // Forever Sequential Sale Number
+        const counterRecord = await Counter.findOneAndUpdate(
+            { id: "saleNumber" },
+            { $inc: { seq: 1 } },
+            { upsert: true, new: true }
+        );
+        const saleNumber = `SALE${String(counterRecord.seq).padStart(4, "0")}`;
 
         // 2. Map Items
         const productIds = quotation.items.map(i => i.productId);
@@ -719,9 +725,12 @@ export const convertQuotationToInvoice = async (req, res) => {
             };
         });
 
+
         // 3. Create Invoice
         const invoice = await Invoice.create({
+            type: "Invoice",
             invoiceNumber,
+            saleNumber,
             invoiceType: quotation.quotationType || "Intrastate",
             customerId: quotation.customerId,
             invoiceDate: today,

@@ -20,6 +20,7 @@ import bankAccountRoutes from "./routes/bankAccountRoutes.js";
 import taxRoutes from "./routes/taxRoutes.js";
 import currencyRoutes from "./routes/currencyRoutes.js";
 import purchaseRoutes from "./routes/purchaseRoutes.js";
+import dashboardRoutes from "./routes/dashboardRoutes.js";
 
 dotenv.config();
 
@@ -70,6 +71,9 @@ app.use("/api/currencies", currencyRoutes);
 
 // Purchase module
 app.use("/api/purchases", purchaseRoutes);
+
+// Dashboard module
+app.use("/api/dashboard", dashboardRoutes);
 
 // Dropdown data for product form
 app.use("/api", dropdownRoutes);

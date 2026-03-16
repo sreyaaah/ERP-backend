@@ -2,8 +2,31 @@ import Invoice from "../models/Invoice.js";
 import Customer from "../models/Customer.js";
 import Product from "../models/Product.js";
 import Counter from "../models/Counter.js";
+import BankAccount from "../models/BankAccount.js";
 import PDFDocument from "pdfkit";
 import ExcelJS from "exceljs";
+
+/** Convert number to Indian words (e.g. 1120 → "One Thousand One Hundred Twenty Rupees Only") */
+const numberToWords = (amount) => {
+    const ones = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine",
+        "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen",
+        "Seventeen", "Eighteen", "Nineteen"];
+    const tens = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
+
+    const convert = (n) => {
+        if (n === 0) return "";
+        if (n < 20) return ones[n] + " ";
+        if (n < 100) return tens[Math.floor(n / 10)] + " " + ones[n % 10] + " ";
+        if (n < 1000) return ones[Math.floor(n / 100)] + " Hundred " + convert(n % 100);
+        if (n < 100000) return convert(Math.floor(n / 1000)) + "Thousand " + convert(n % 1000);
+        if (n < 10000000) return convert(Math.floor(n / 100000)) + "Lakh " + convert(n % 100000);
+        return convert(Math.floor(n / 10000000)) + "Crore " + convert(n % 10000000);
+    };
+
+    const num = Math.round(amount);
+    if (num === 0) return "Zero Rupees Only";
+    return convert(num).trim() + " Rupees Only";
+};
 
 /** Helper to compute totals */
 const computeTotals = (items) => {
@@ -147,6 +170,8 @@ export const getInvoiceById = async (req, res) => {
                 address: inv.customerAddress || inv.customerId?.address || "",
                 gstin: inv.customerGstin || inv.customerId?.gstin || ""
             },
+            customerAddress: inv.customerAddress || (inv.customerId ? `${inv.customerId.address || ""}\n${inv.customerId.city || ""} ${inv.customerId.state || ""} ${inv.customerId.postalCode || ""}`.trim() : ""),
+            customerGstin: inv.customerGstin || inv.customerId?.gstin || "",
             invoiceDate: inv.invoiceDate.toISOString().split('T')[0],
             dueDate: inv.dueDate.toISOString().split('T')[0],
             paymentStatus: inv.paymentStatus,
@@ -164,8 +189,10 @@ export const getInvoiceById = async (req, res) => {
             taxAmount: inv.taxAmount,
             grandTotal: inv.grandTotal,
             paidAmount: inv.paidAmount || 0,
+            amountInWords: inv.amountInWords || "",
             notes: inv.notes,
-            terms: inv.terms
+            terms: inv.terms,
+            createdAt: inv.createdAt
         };
 
         return res.status(200).json({ status: true, data });
@@ -374,13 +401,43 @@ export const bulkUpdateInvoices = async (req, res) => {
     }
 };
 
-// Export Bulk PDF
+// Export Bulk PDF - OPTIMIZED with pagination support
 export const exportInvoicesPdf = async (req, res) => {
     try {
-        const invoices = await Invoice.find().populate("customerId").sort({ createdAt: -1 });
-        const doc = new PDFDocument({ margin: 40 });
+        // ✅ Support optional pagination: ?limit=100&page=1
+        const limit = Math.min(Number(req.query.limit) || 500, 1000); // Max 1000 per request
+        const page = Math.max(Number(req.query.page) || 1, 1);
+        const skip = (page - 1) * limit;
+
+        // ✅ Use .lean() for faster queries + field projection
+        const invoices = await Invoice.find()
+            .select("invoiceNumber customerName customerId invoiceDate invoiceType paymentStatus grandTotal")
+            .lean() // Skip Mongoose overhead
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit);
+
+        // ✅ Batch fetch customer names if needed (only if customerId exists and name not provided)
+        const customerIds = invoices
+            .filter(inv => inv.customerId && !inv.customerName)
+            .map(inv => inv.customerId);
+        
+        let customerMap = {};
+        if (customerIds.length > 0) {
+            const customers = await Customer.find({ _id: { $in: customerIds } })
+                .select("_id firstName lastName")
+                .lean();
+            customerMap = customers.reduce((acc, c) => {
+                acc[c._id.toString()] = `${c.firstName} ${c.lastName}`.trim();
+                return acc;
+            }, {});
+        }
+
+        // ✅ Set headers BEFORE PDF generation - enables streaming
         res.setHeader("Content-Type", "application/pdf");
-        res.setHeader("Content-Disposition", "attachment; filename=invoices.pdf");
+        res.setHeader("Content-Disposition", `attachment; filename=invoices-${Date.now()}.pdf`);
+
+        const doc = new PDFDocument({ margin: 40 });
         doc.pipe(res);
 
         // Title
@@ -440,7 +497,8 @@ export const exportInvoicesPdf = async (req, res) => {
                 doc.font("Helvetica").fillColor(tableColor);
             }
 
-            const customerName = inv.customerName || (inv.customerId ? `${inv.customerId.firstName} ${inv.customerId.lastName}` : "Walk-in");
+            // ✅ Use customerMap for already-fetched names, fallback to stored name
+            const customerName = inv.customerName || customerMap[inv.customerId?.toString()] || "Walk-in";
             const amtStr = `${inv.invoiceType === 'International' ? '$' : 'Rs.'}${Number(inv.grandTotal).toFixed(2)}`;
 
             doc.fillColor(tableColor);
@@ -483,16 +541,46 @@ export const exportInvoicesPdf = async (req, res) => {
         doc.text(`Total Invoices: ${totalInvoices}`, 395, y + 28);
         doc.text(`Total Value: ${totalValue.toFixed(2)}`, 395, y + 42);
 
-        doc.end();
+        doc.end(); // ✅ Flushes pipe to response
     } catch (error) {
-        res.status(500).json({ status: false, message: error.message });
+        if (!res.headersSent) {
+            res.status(500).json({ status: false, message: error.message });
+        }
     }
 };
 
-// Export Bulk Excel
+// Export Bulk Excel - OPTIMIZED with pagination
 export const exportInvoicesXlsx = async (req, res) => {
     try {
-        const invoices = await Invoice.find().populate("customerId").sort({ createdAt: -1 });
+        // ✅ Support optional pagination: ?limit=500&page=1
+        const limit = Math.min(Number(req.query.limit) || 500, 2000); // Max 2000 per request
+        const page = Math.max(Number(req.query.page) || 1, 1);
+        const skip = (page - 1) * limit;
+
+        // ✅ Use .lean() for faster queries + field projection
+        const invoices = await Invoice.find()
+            .select("invoiceNumber customerName customerId invoiceDate grandTotal paymentStatus")
+            .lean()
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit);
+
+        // ✅ Batch fetch customer names if needed
+        const customerIds = invoices
+            .filter(inv => inv.customerId && !inv.customerName)
+            .map(inv => inv.customerId);
+        
+        let customerMap = {};
+        if (customerIds.length > 0) {
+            const customers = await Customer.find({ _id: { $in: customerIds } })
+                .select("_id firstName lastName")
+                .lean();
+            customerMap = customers.reduce((acc, c) => {
+                acc[c._id.toString()] = `${c.firstName} ${c.lastName}`.trim();
+                return acc;
+            }, {});
+        }
+
         const workbook = new ExcelJS.Workbook();
         const sheet = workbook.addWorksheet("Invoices");
 
@@ -504,10 +592,15 @@ export const exportInvoicesXlsx = async (req, res) => {
             { header: "Status", key: "status", width: 15 }
         ];
 
+        const headerRow = sheet.getRow(1);
+        headerRow.font = { bold: true, color: { argb: "FFFFFFFF" } };
+        headerRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4472C4" } };
+
         invoices.forEach(inv => {
+            const customerName = inv.customerName || customerMap[inv.customerId?.toString()] || "Walk-in";
             sheet.addRow({
                 invoiceNumber: inv.invoiceNumber,
-                customer: inv.customerId ? `${inv.customerId.firstName} ${inv.customerId.lastName}` : "Walk-in",
+                customer: customerName,
                 date: inv.invoiceDate.toISOString().split('T')[0],
                 total: inv.grandTotal,
                 status: inv.paymentStatus
@@ -515,47 +608,274 @@ export const exportInvoicesXlsx = async (req, res) => {
         });
 
         res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-        res.setHeader("Content-Disposition", "attachment; filename=invoices.xlsx");
+        res.setHeader("Content-Disposition", `attachment; filename=invoices-${Date.now()}.xlsx`);
         await workbook.xlsx.write(res);
         res.end();
     } catch (error) {
-        res.status(500).json({ status: false, message: error.message });
+        if (!res.headersSent) {
+            res.status(500).json({ status: false, message: error.message });
+        }
     }
 };
 
-// Single Invoice Report (PDF Download)
+// Single Invoice Report (PDF Download) - OPTIMIZED
 export const exportSingleInvoicePdf = async (req, res) => {
     try {
-        const inv = await Invoice.findById(req.params.id).populate("customerId");
+        const inv = await Invoice.findById(req.params.id)
+            .populate("customerId")
+            .lean();
         if (!inv) return res.status(404).json({ status: false, message: "Invoice not found" });
 
-        const doc = new PDFDocument();
+        const bankAccount = await BankAccount.findOne({ isDefault: true }).lean().catch(() => null);
+        const customer = inv.customerId;
+
+        // Set headers for streaming
         res.setHeader("Content-Type", "application/pdf");
-        res.setHeader("Content-Disposition", `attachment; filename=invoice-${inv.invoiceNumber}.pdf`);
+        res.setHeader("Content-Disposition", `attachment; filename=Invoice_${inv.invoiceNumber}.pdf`);
+
+        const doc = new PDFDocument({ size: "A4", margin: 40 });
         doc.pipe(res);
 
-        doc.fontSize(25).text(`INVOICE: ${inv.invoiceNumber}`, { align: "center" });
-        doc.moveDown();
-        doc.fontSize(12).text(`Date: ${inv.invoiceDate.toISOString().split('T')[0]}`);
-        doc.text(`Due Date: ${inv.dueDate.toISOString().split('T')[0]}`);
-        doc.moveDown();
-        doc.text("Bill To:");
-        doc.text(inv.customerId ? `${inv.customerId.firstName} ${inv.customerId.lastName}` : "Walk-in Customer");
-        if (inv.customerId?.email) doc.text(inv.customerId.email);
-        doc.moveDown();
+        const margin = 40;
+        const pageWidth = 595.28;
+        const width = pageWidth - (margin * 2); 
+        const endX = pageWidth - margin;
+        
+        // --- TITLE ---
+        doc.font("Helvetica-Bold").fontSize(12).text("Tax Invoice", margin, 40, { align: "center", width: width });
 
-        doc.font("Helvetica-Bold").text("Items", { underline: true });
-        inv.items.forEach((item, idx) => {
-            doc.font("Helvetica").text(`${idx + 1}. ${item.productName} - Qty: ${item.quantity} x Rate: ${item.rate} = ${item.amount}`);
+        // --- HEADER GRID BOX ---
+        let currentY = 60;
+        const headerHeight = 220;
+        doc.rect(margin, currentY, width, headerHeight).lineWidth(0.8).strokeColor("#000").stroke();
+        
+        // Vertical split at the middle
+        const midX = margin + (width / 2);
+        doc.moveTo(midX, currentY).lineTo(midX, currentY + headerHeight).stroke();
+
+        // Left Side Content
+        doc.fontSize(9).font("Helvetica-Bold").text("Invoice From:", margin + 5, currentY + 5);
+        doc.fontSize(10).text("WEBERFOX TECHNOLOGIES PVT LTD", margin + 5, currentY + 20);
+        doc.font("Helvetica").fontSize(8).text(
+            "Building No:15/538, Koduvazhathu, Koivila P.O, Thevalakkara,\nKarunagappally, Kollam, Kerala, INDIA. PIN: 691590\nGSTIN/UIN: 32AADCW0489R1ZQ\nState Name: Kerala, code:32\nE-Mail: contact@weberfox.com\nContact number: +91 94962 69666",
+            margin + 5, currentY + 35, { width: (width/2) - 10, lineGap: 2 }
+        );
+
+        // Horizontal line for Buyer section
+        const buyerY = currentY + 110;
+        doc.moveTo(margin, buyerY).lineTo(midX, buyerY).stroke();
+        doc.fontSize(9).font("Helvetica-Bold").text("Buyer (Bill to):", margin + 5, buyerY + 5);
+        
+        const custName = customer ? `${customer.firstName} ${customer.lastName || ""}`.trim() : (inv.customerName || "-");
+        doc.fontSize(10).text(custName.toUpperCase(), margin + 5, buyerY + 20);
+        const custAddr = customer?.address || inv.customerAddress || "";
+        doc.font("Helvetica").fontSize(8).text(custAddr, margin + 5, buyerY + 35, { width: (width/2) - 10 });
+        if (inv.customerGstin) {
+            doc.font("Helvetica-Bold").text(`GSTIN/UIN: ${inv.customerGstin}`, margin + 5, doc.y + 5);
+        }
+
+        // Right Side Content (Logo and Grid)
+        try {
+            const logoPath = "d:/ERP/react/template/src/assets/img/logo.png";
+            doc.image(logoPath, midX + 40, currentY + 10, { width: 150 });
+        } catch(e) {
+            doc.fontSize(22).font("Helvetica-Bold").fillColor("#fe9f43").text("WeberFox", midX + 50, currentY + 15);
+        }
+        doc.fillColor("#000").fontSize(7).font("Helvetica").text("AHEAD BY A WAVELENGTH", midX, currentY + 55, { align: "center", width: width/2 });
+
+        // Right side sub-grid
+        const gridRow1 = currentY + 70;
+        const gridRow2 = currentY + 115;
+        const gridRow3 = currentY + 160;
+        
+        doc.moveTo(midX, gridRow1).lineTo(endX, gridRow1).stroke();
+        doc.moveTo(midX, gridRow2).lineTo(endX, gridRow2).stroke();
+        doc.moveTo(midX, gridRow3).lineTo(endX, gridRow3).stroke();
+
+        // Invoice No / Date vertical split
+        const invSplitX = midX + (width/4);
+        doc.moveTo(invSplitX, gridRow1).lineTo(invSplitX, gridRow3).stroke();
+
+        doc.fontSize(8).font("Helvetica").text("Invoice No.", midX + 5, gridRow1 + 5);
+        doc.fontSize(9).font("Helvetica-Bold").text(inv.invoiceNumber, midX + 5, gridRow1 + 20);
+
+        doc.fontSize(8).font("Helvetica").text("Dated", invSplitX + 5, gridRow1 + 5);
+        doc.fontSize(9).font("Helvetica-Bold").text(new Date(inv.invoiceDate).toLocaleDateString("en-GB"), invSplitX + 5, gridRow1 + 20);
+
+        doc.fontSize(8).font("Helvetica").text("Quote Ref. No.", midX + 5, gridRow2 + 5);
+        const quoteNo = inv.notes?.match(/Quotation: ([^\s\(]+)/)?.[1] || "-";
+        doc.fontSize(9).font("Helvetica-Bold").text(quoteNo, midX + 5, gridRow2 + 20);
+
+        doc.fontSize(8).font("Helvetica").text("Dated", invSplitX + 5, gridRow2 + 5);
+        const qDate = inv.notes?.match(/\(Dated: (.*?)\)/)?.[1] || "-";
+        doc.fontSize(9).font("Helvetica-Bold").text(qDate, invSplitX + 5, gridRow2 + 20);
+
+        doc.fontSize(8).font("Helvetica").text("Place of Supply :", midX + 5, gridRow3 + 5);
+        doc.fontSize(9).font("Helvetica-Bold").text((inv.placeOfSupply || "KOLLAM").toUpperCase(), midX + 5, gridRow3 + 20);
+
+        currentY += headerHeight + 5;
+
+        // --- ITEMS TABLE ---
+        const x = {
+            sno: margin,           // 40
+            item: margin + 25,     // 65
+            hsn: margin + 125,    // 165
+            qty: margin + 175,    // 215
+            rate: margin + 205,   // 245
+            amt: margin + 275,    // 315
+            igst: margin + 345,   // 385
+            total: margin + 430   // 470
+        }
+
+        const tableTop = currentY;
+        const th = 45; // Table Header height
+        doc.rect(margin, tableTop, width, th).stroke();
+        [x.item, x.hsn, x.qty, x.rate, x.amt, x.igst, x.total].forEach(posX => {
+            doc.moveTo(posX, tableTop).lineTo(posX, tableTop + th).stroke();
+        });
+        // IGST split
+        doc.moveTo(x.igst, tableTop + 22).lineTo(x.total, tableTop + 22).stroke();
+        doc.moveTo(x.igst + 30, tableTop + 22).lineTo(x.igst + 30, tableTop + th).stroke();
+
+        doc.fontSize(8).font("Helvetica-Bold");
+        doc.text("Sl. No.", x.sno, tableTop + 18, { width: 25, align: "center" });
+        doc.text("Item & Description", x.item, tableTop + 18, { width: 100, align: "center" });
+        doc.text("HSN/\nSAC", x.hsn, tableTop + 15, { width: 50, align: "center" });
+        doc.text("Qty.", x.qty, tableTop + 18, { width: 30, align: "center" });
+        doc.text("Rate", x.rate, tableTop + 18, { width: 70, align: "center" });
+        doc.text("Amt.", x.amt, tableTop + 18, { width: 70, align: "center" });
+        doc.text("IGST", x.igst, tableTop + 5, { width: 85, align: "center" });
+        doc.text("%", x.igst, tableTop + 28, { width: 25, align: "center" });
+        doc.text("Amt.", x.igst + 25, tableTop + 28, { width: 60, align: "center" });
+        doc.text("Total Amount\n(Inc. IGST)", x.total, tableTop + 15, { width: 85, align: "center" });
+
+        let rowY = tableTop + th;
+        doc.font("Helvetica").fontSize(8);
+        const minRowH = 50; 
+
+        inv.items.forEach((item, i) => {
+            // Pre-calculate height
+            const textOptions = { width: 95 };
+            const itemH = Math.max(minRowH, doc.heightOfString(item.productName || "-", textOptions) + 20);
+            
+            // Check page break
+            if (rowY + itemH > 780) {
+                doc.addPage();
+                rowY = 50;
+            }
+
+            doc.rect(margin, rowY, width, itemH).stroke();
+            [x.item, x.hsn, x.qty, x.rate, x.amt, x.igst, x.igst + 25, x.total].forEach(posX => {
+                doc.moveTo(posX, rowY).lineTo(posX, rowY + itemH).stroke();
+            });
+
+            doc.text(`${i + 1}`, x.sno, rowY + 10, { width: 25, align: "center" });
+            doc.font("Helvetica-Bold").text(item.productName || "-", x.item + 3, rowY + 10, textOptions);
+            doc.font("Helvetica").text(item.hsnSac || "-", x.hsn, rowY + 10, { width: 50, align: "center" });
+            doc.text(`${item.quantity}`, x.qty, rowY + 10, { width: 30, align: "center" });
+            doc.text(`${(item.rate || 0).toLocaleString("en-IN", {minimumFractionDigits: 2})}`, x.rate, rowY + 10, { width: 65, align: "right" });
+            
+            const itemBaseAmt = (item.quantity || 0) * (item.rate || 0);
+            doc.text(`${itemBaseAmt.toLocaleString("en-IN", {minimumFractionDigits: 2})}`, x.amt, rowY + 10, { width: 65, align: "right" });
+            doc.text(`${item.taxPercent || 18}`, x.igst, rowY + 10, { width: 25, align: "center" });
+            
+            const itemTax = (itemBaseAmt * (item.taxPercent || 18)) / 100;
+            doc.text(`${itemTax.toLocaleString("en-IN", {minimumFractionDigits: 2})}`, x.igst + 25, rowY + 10, { width: 55, align: "right" });
+            
+            const itemTotal = itemBaseAmt + itemTax;
+            doc.font("Helvetica-Bold").text(`${itemTotal.toLocaleString("en-IN", {minimumFractionDigits: 2})}`, x.total, rowY + 10, { width: 80, align: "right" });
+            
+            rowY += itemH;
         });
 
-        doc.moveDown();
-        doc.font("Helvetica-Bold").text(`Subtotal: ${inv.subtotal}`);
-        doc.text(`Tax: ${inv.taxAmount}`);
-        doc.text(`Grand Total: ${inv.grandTotal}`);
+        // --- TOTALS ROW ---
+        const totalRowH = 20;
+        doc.rect(margin, rowY, width, totalRowH).lineWidth(0.8).stroke();
+        [x.qty, x.amt, x.igst + 25, x.total].forEach(posX => {
+            doc.moveTo(posX, rowY).lineTo(posX, rowY + totalRowH).stroke();
+        });
+        doc.font("Helvetica-Bold").text("TOTAL", x.sno, rowY + 6, { width: x.qty - x.sno, align: "center" });
+        const totalQty = inv.items.reduce((a, b) => a + (b.quantity || 0), 0);
+        doc.text(`${totalQty}`, x.qty, rowY + 6, { width: 30, align: "center" });
+        doc.text(`${(inv.subtotal || 0).toLocaleString("en-IN", {minimumFractionDigits: 2})}`, x.amt, rowY + 6, { width: 65, align: "right" });
+        doc.text(`${(inv.taxAmount || 0).toLocaleString("en-IN", {minimumFractionDigits: 2})}`, x.igst + 25, rowY + 6, { width: 55, align: "right" });
+        doc.text(`${(inv.grandTotal || 0).toLocaleString("en-IN", {minimumFractionDigits: 2})}`, x.total, rowY + 6, { width: 80, align: "right" });
+        rowY += totalRowH;
+
+        // --- ROUNDED OFF ROW ---
+        const roundH = 35;
+        doc.rect(margin, rowY, width, roundH).stroke();
+        doc.fontSize(12).text(`Total Invoice Amount (Rounded off) :  Rs.${Math.round(inv.grandTotal).toLocaleString("en-IN")}`, margin, rowY + 12, { align: "center", width: width });
+        rowY += roundH + 10;
+
+        // --- FOOTER SECTION ---
+        const footerH = 140;
+        if (rowY + footerH > 800) {
+            doc.addPage();
+            rowY = 40;
+        }
+
+        // Main Footer Box
+        doc.rect(margin, rowY, width, footerH).lineWidth(0.8).strokeColor("#000").stroke();
+        
+        // Vertical Divider
+        doc.moveTo(midX, rowY).lineTo(midX, rowY + footerH).stroke();
+
+        // Left Side: Amount in Words & Remarks
+        doc.fontSize(8).font("Helvetica").text("Amount Chargeable (in words):", margin + 5, rowY + 5);
+        const amountWords = numberToWords(inv.grandTotal);
+        doc.fontSize(9).font("Helvetica-Bold").text(`INR ${amountWords.toUpperCase()}`, margin + 5, rowY + 15, { width: (width/2) - 10 });
+        
+        doc.fontSize(8).font("Helvetica").text("Remarks:", margin + 5, rowY + 75);
+        doc.text(inv.notes?.split('\n')[0] || "Warranty: As per Manufacturer", margin + 5, rowY + 85, { width: (width/2) - 10 });
+
+        // Right Side: Bank Details
+        doc.fontSize(9).font("Helvetica").text("Company's Bank Details :", midX + 5, rowY + 5);
+        const bankStartY = rowY + 22;
+        const labelX = midX + 5;
+        const valueX = midX + 105;
+        const colonX = midX + 100;
+
+        doc.fontSize(8).font("Helvetica");
+        const labels = [
+            "A/c Holder's Name", 
+            "Bank Name", 
+            "A/c no.", 
+            "Branch & IFSC Code", 
+            "SWIFT Code"
+        ];
+        const values = [
+            "WEBERFOX TECHNOLOGIES PVT. LTD.",
+            (bankAccount?.bankName || "AXIS BANK").toUpperCase(),
+            bankAccount?.accountNumber || "921020052009341",
+            `${(bankAccount?.branch || "KOCHI").toUpperCase()} & ${bankAccount?.ifsc || "UTIB0000081"}`,
+            bankAccount?.swiftCode || "AXISINBB081"
+        ];
+
+        let currentBankY = bankStartY;
+        labels.forEach((label, idx) => {
+            const textOptions = { width: (width/2) - 110 };
+            const rowH = Math.max(12, doc.heightOfString(values[idx], textOptions));
+            
+            doc.font("Helvetica").text(label, labelX, currentBankY);
+            doc.text(":", colonX, currentBankY);
+            doc.font("Helvetica-Bold").text(values[idx], valueX, currentBankY, textOptions);
+            currentBankY += rowH + 2;
+        });
+
+        // Signatory box horizontal line (Placed below SWIFT code)
+        const sigLineY = Math.max(rowY + 90, currentBankY + 5);
+        doc.moveTo(midX, sigLineY).lineTo(endX, sigLineY).stroke();
+
+        // Authorized Signatory section
+        doc.fontSize(8).font("Helvetica-Bold").text("for WEBERFOX TECHNOLOGIES PVT. LTD.", midX + 5, sigLineY + 5, { align: "center", width: (width/2) - 10 });
+        doc.fontSize(8).font("Helvetica").text("Authorized signatory", midX + 5, rowY + footerH - 15, { align: "right", width: (width/2) - 15 });
 
         doc.end();
+
     } catch (error) {
-        res.status(500).json({ status: false, message: error.message });
+        if (!res.headersSent) {
+            res.status(500).json({ status: false, message: error.message });
+        }
     }
 };

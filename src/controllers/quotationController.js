@@ -3,6 +3,7 @@ import Customer from "../models/Customer.js";
 import Product from "../models/Product.js";
 import Invoice from "../models/Invoice.js";
 import Counter from "../models/Counter.js";
+import BankAccount from "../models/BankAccount.js";
 import PDFDocument from "pdfkit";
 import ExcelJS from "exceljs";
 
@@ -59,6 +60,8 @@ const formatQuotation = (q, customer, productMap) => ({
     customerId: q.customerId,
     customerName: customer ? `${customer.firstName} ${customer.lastName || ""}`.trim() : "",
     customerAvatar: customer?.avatar || null,
+    customerAddress: customer ? `${customer.address || ""}\n${customer.city || ""} ${customer.state || ""} ${customer.postalCode || ""}`.trim() : "",
+    customerGstin: customer?.gstin || "",
     date: q.date,
     validity: q.validity,
     reference: q.reference,
@@ -385,144 +388,251 @@ export const bulkUpdateQuotations = async (req, res) => {
 };
 
 //  9. GET /api/quotations/:id/export/pdf 
+// 9. GET /api/quotations/:id/export/pdf  ← OPTIMIZED
 export const exportSingleQuotationPdf = async (req, res) => {
+  try {
+    const quotation = await Quotation.findById(req.params.id).lean();
+    if (!quotation) return res.status(404).json({ message: "Quotation not found", status: false });
+
+    const allProductIds = quotation.items.map((i) => i.productId?.toString());
+    const [customer, products, bankAccount] = await Promise.all([
+      Customer.findById(quotation.customerId).lean(),
+      Product.find({ _id: { $in: allProductIds } }).select("_id product").lean(),
+      BankAccount.findOne({ isDefault: true }).lean().catch(() => null)
+    ]);
+
+    const productMap = products.reduce((acc, p) => { acc[p._id.toString()] = p.product; return acc; }, {});
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename=Quotation_${quotation.quotationNo}.pdf`);
+
+    // Margin and Width Setup
+    const doc = new PDFDocument({ size: "A4", margin: 40 });
+    doc.pipe(res);
+
+    const margin = 40;
+    const pageWidth = 595.28;
+    const tableWidth = pageWidth - (margin * 2); // 515 pts
+    const endX = pageWidth - margin;
+
+    // --- HEADER SECTION ---
+    const logoPath = "d:/ERP/react/template/src/assets/img/logo.png";
     try {
-        const quotation = await Quotation.findById(req.params.id);
-        if (!quotation) return res.status(404).json({ message: "Quotation not found", status: false });
-
-        const customer = await Customer.findById(quotation.customerId);
-
-        const allProductIds = quotation.items.map((i) => i.productId?.toString());
-        const products = await Product.find({ _id: { $in: allProductIds } }).select("_id product");
-        const productMap = products.reduce((acc, p) => { acc[p._id.toString()] = p.product; return acc; }, {});
-
-        const doc = new PDFDocument({ size: "A4", margin: 50, bufferPages: true });
-        const chunks = [];
-        doc.on("data", (c) => chunks.push(c));
-        doc.on("end", () => {
-            const buffer = Buffer.concat(chunks);
-            res.setHeader("Content-Type", "application/pdf");
-            res.setHeader("Content-Disposition", `attachment; filename=quotation-${quotation.quotationNo}.pdf`);
-            res.send(buffer);
-        });
-
-        // Header
-        doc.fontSize(22).font("Helvetica-Bold").fillColor("#fe9f43").text("DreamsPOS ERP", { align: "center" });
-        doc.fontSize(11).font("Helvetica").fillColor("#666").text("Quotation", { align: "center" });
-        doc.moveDown();
-        doc.moveTo(50, doc.y).lineTo(550, doc.y).strokeColor("#eee").stroke();
-        doc.moveDown();
-
-        // Quotation meta
-        doc.fontSize(10).font("Helvetica-Bold").fillColor("#333");
-        const metaY = doc.y;
-        doc.text(`Quotation No: ${quotation.quotationNo}`, 50, metaY);
-        doc.text(`Date: ${new Date(quotation.date).toLocaleDateString()}`, 350, metaY);
-        doc.text(`Validity: ${new Date(quotation.validity).toLocaleDateString()}`, 350, metaY + 18);
-        doc.text(`Type: ${quotation.quotationType}`, 50, metaY + 18);
-        if (quotation.reference) doc.text(`Reference: ${quotation.reference}`, 50, metaY + 36);
-        doc.moveDown(3);
-
-        // Customer info
-        doc.fontSize(12).font("Helvetica-Bold").fillColor("#333").text("Bill To:");
-        doc.fontSize(10).font("Helvetica").fillColor("#555");
-        if (customer) {
-            doc.text(`${customer.firstName} ${customer.lastName || ""}`.trim());
-            if (customer.email) doc.text(customer.email);
-            if (customer.phone) doc.text(customer.phone);
-            if (customer.address) doc.text(customer.address);
-            if (customer.gstin) doc.text(`GSTIN: ${customer.gstin}`);
-        }
-        doc.moveDown();
-
-        // Items table header
-        const tableTop = doc.y + 10;
-        const cols = { sno: 50, item: 90, qty: 270, rate: 310, disc: 360, tax: 405, unitCost: 445, total: 495 };
-
-        doc.rect(45, tableTop, 510, 20).fill("#4472C4");
-        doc.fontSize(9).font("Helvetica-Bold").fillColor("#fff");
-        doc.text("#", cols.sno, tableTop + 5);
-        doc.text("Item", cols.item, tableTop + 5, { width: 170 });
-        doc.text("Qty", cols.qty, tableTop + 5);
-        doc.text("Rate", cols.rate, tableTop + 5);
-        doc.text("Disc%", cols.disc, tableTop + 5);
-        doc.text("Tax%", cols.tax, tableTop + 5);
-        doc.text("Unit Cost", cols.unitCost, tableTop + 5, { width: 45 });
-        doc.text("Total", cols.total, tableTop + 5);
-
-        let rowY = tableTop + 25;
-        doc.font("Helvetica").fillColor("#333").fontSize(9);
-
-        quotation.items.forEach((item, idx) => {
-            if (rowY > 720) { doc.addPage(); rowY = 50; }
-            if (idx % 2 === 0) doc.rect(45, rowY - 3, 510, 18).fill("#f9f9f9");
-
-            doc.fillColor("#333");
-            doc.text(`${idx + 1}`, cols.sno, rowY);
-            doc.text(productMap[item.productId?.toString()] || "-", cols.item, rowY, { width: 170 });
-            doc.text(`${item.qty}`, cols.qty, rowY);
-            doc.text(`₹${item.rate}`, cols.rate, rowY);
-            doc.text(`${item.discountPercent}%`, cols.disc, rowY);
-            doc.text(`${item.taxPercent}%`, cols.tax, rowY);
-            doc.text(`₹${item.unitCost}`, cols.unitCost, rowY, { width: 45 });
-            doc.text(`₹${item.totalCost}`, cols.total, rowY);
-            rowY += 20;
-        });
-
-        // Totals
-        rowY += 10;
-        doc.moveTo(350, rowY).lineTo(555, rowY).strokeColor("#ccc").stroke();
-        rowY += 8;
-        doc.fontSize(10).font("Helvetica").fillColor("#333");
-        doc.text("Subtotal:", 370, rowY); doc.text(`₹${quotation.subtotal.toFixed(2)}`, 490, rowY);
-        rowY += 18;
-        doc.font("Helvetica-Bold").fontSize(11).fillColor("#000");
-        doc.text("Grand Total:", 370, rowY); doc.text(`₹${quotation.grandTotal.toFixed(2)}`, 485, rowY);
-        rowY += 18;
-        doc.font("Helvetica").fontSize(9).fillColor("#555");
-        doc.text(`Amount in Words: ${quotation.amountInWords}`, 50, rowY, { width: 500 });
-
-        // Description
-        if (quotation.description) {
-            rowY += 25;
-            doc.fontSize(10).font("Helvetica-Bold").fillColor("#333").text("Description:", 50, rowY);
-            rowY += 15;
-            doc.font("Helvetica").fontSize(9).fillColor("#555").text(stripHtml(quotation.description), 50, rowY, { width: 500 });
-        }
-
-        // Status
-        doc.rect(50, doc.page.height - 80, 510, 22).fill("#f0f0f0");
-        doc.fontSize(10).font("Helvetica-Bold").fillColor("#333")
-            .text(`Status: ${quotation.status}`, 50, doc.page.height - 75, { align: "center" });
-
-        // Footer
-        doc.fontSize(8).fillColor("#aaa")
-            .text("Generated by DreamsPOS ERP System", 50, doc.page.height - 50, { align: "center" });
-
-        doc.end();
-    } catch (error) {
-        res.status(500).json({ message: error.message, status: false });
+        doc.image(logoPath, margin, 35, { height: 40 });
+    } catch(e) {
+        doc.fontSize(18).font("Helvetica-Bold").fillColor("#fe9f43").text("Dreams POS", margin, 40);
     }
+    
+    const rAlignX = 300;
+    doc.fontSize(10).font("Helvetica-Bold").fillColor("#800040").text("Quotation From", rAlignX, 40, { align: "right", width: 255 });
+    doc.fontSize(14).fillColor("#000").text("WEBERFOX TECHNOLOGIES PVT LTD.", rAlignX, 55, { align: "right", width: 255 });
+    
+    // Use doc.y to prevent overlapping if the company name wraps
+    const addressY = Math.max(doc.y + 12, 90);
+    doc.fontSize(9).font("Helvetica").text("Building No :15/538, Koivila PO.\nThevalakkara , Kollam\nPIN:691590\nPh: +91 9496269666\ne-mail: contact@weberfox.com\nGSTIN: 32AADCW0489R1ZQ", rAlignX, addressY, { align: "right", width: 255, lineGap: 3 });
+
+    doc.fontSize(22).font("Helvetica-Bold").text("QUOTATION", margin, 90);
+
+    doc.fontSize(9).font("Helvetica-Bold").text(`Quote Ref No: ${quotation.quotationNo}`, margin, 120);
+    doc.text(`Quote Date: ${new Date(quotation.date).toLocaleDateString("en-GB")}`, margin, 133);
+    doc.text(`Quote Validity: ${quotation.validity ? new Date(quotation.validity).toLocaleDateString("en-GB") : "—"}`, margin, 146);
+
+    // Moved line down to avoid overlap with address
+    doc.moveTo(margin, 190).lineTo(endX, 190).lineWidth(0.5).strokeColor("#ccc").stroke();
+
+    // --- BILLING AND PAYMENT ---
+    let midY = 200;
+    doc.fontSize(12).font("Helvetica-Bold").fillColor("#000").text("Billed to", margin, midY);
+    doc.text("Payment Details", rAlignX, midY, { align: "right", width: 255 });
+    
+    doc.fontSize(9).font("Helvetica");
+    const custName = customer ? `${customer.firstName} ${customer.lastName || ""}`.trim() : "-";
+    doc.text(custName, margin, midY + 12);
+    if (customer?.address) doc.text(customer.address, margin, midY + 24, { width: 220 });
+    doc.font("Helvetica-Bold").text(`Place of Supply: ${quotation.quotationType || "Intrastate"}`, margin, midY + 65);
+
+    doc.font("Helvetica").text(`Bank Acc No: ${bankAccount?.accountNumber || "12345678901796"}`, rAlignX, midY + 12, { align: "right", width: 255 });
+    doc.text(`IFSC : ${bankAccount?.ifsc || "SWIS0009876"}`, rAlignX, midY + 24, { align: "right", width: 255 });
+    doc.text(`${bankAccount?.bankName || "Swiss Bank"}, ${bankAccount?.branch || "Ernakulam"}`, rAlignX, midY + 36, { align: "right", width: 255 });
+
+    doc.fontSize(10).font("Helvetica-Bold").text(`Quotation for ${quotation.description || 'phone'}`, margin, 300, { underline: true });
+
+    // --- TABLE DEFINITION ---
+    const tableTop = 325;
+    const x = {
+      sno: margin,           // 40
+      item: margin + 25,     // 65
+      hsn: margin + 125,    // 165
+      qty: margin + 175,    // 215
+      rate: margin + 205,   // 245
+      amt: margin + 275,    // 315
+      igst: margin + 345,   // 385
+      total: margin + 430   // 470
+    };
+
+    // Table Header Background and Outline
+    doc.rect(x.sno, tableTop, tableWidth, 45).lineWidth(0.8).strokeColor("#000").stroke();
+    
+    // Header Vertical Lines
+    [x.item, x.hsn, x.qty, x.rate, x.amt, x.igst, x.total].forEach(posX => {
+      doc.moveTo(posX, tableTop).lineTo(posX, tableTop + 45).stroke();
+    });
+    // IGST Splitter
+    doc.moveTo(x.igst, tableTop + 22).lineTo(x.total, tableTop + 22).stroke();
+    doc.moveTo(x.igst + 25, tableTop + 22).lineTo(x.igst + 25, tableTop + 45).stroke();
+
+    doc.fontSize(8).font("Helvetica-Bold");
+    doc.text("Sl.\nNo.", x.sno, tableTop + 12, { width: 25, align: "center" });
+    doc.text("Item &\nDescription", x.item + 5, tableTop + 12, { width: 95, align: "center" });
+    doc.text("HSN/SAC", x.hsn, tableTop + 18, { width: 50, align: "center" });
+    doc.text("Qty.", x.qty, tableTop + 18, { width: 30, align: "center" });
+    doc.text("Rate", x.rate, tableTop + 18, { width: 70, align: "center" });
+    doc.text("Amt.", x.amt, tableTop + 18, { width: 70, align: "center" });
+    doc.text("IGST", x.igst, tableTop + 7, { width: 85, align: "center" });
+    doc.text("%", x.igst, tableTop + 28, { width: 25, align: "center" });
+    doc.text("Amt.", x.igst + 25, tableTop + 28, { width: 60, align: "center" });
+    doc.text("Total Amount\n(Inc. IGST)", x.total, tableTop + 12, { width: 85, align: "center" });
+
+    let rowY = tableTop + 45;
+    doc.font("Helvetica").fontSize(8);
+
+    quotation.items.forEach((item, i) => {
+      const rowHeight = 25;
+      doc.rect(x.sno, rowY, tableWidth, rowHeight).stroke();
+      
+      // Row Vertical Lines
+      [x.item, x.hsn, x.qty, x.rate, x.amt, x.igst, x.igst + 25, x.total].forEach(posX => {
+        doc.moveTo(posX, rowY).lineTo(posX, rowY + rowHeight).stroke();
+      });
+
+      doc.text(`${i + 1}`, x.sno, rowY + 8, { width: 25, align: "center" });
+      doc.font("Helvetica-Bold").text(productMap[item.productId?.toString()] || "-", x.item + 5, rowY + 8, { width: 95, height: 15, ellipsis: true });
+      doc.font("Helvetica").text(item.hsnSac || "-", x.hsn, rowY + 8, { width: 50, align: "center" });
+      doc.text(`${item.qty}`, x.qty, rowY + 8, { width: 30, align: "center" });
+      doc.text(`${item.rate.toLocaleString("en-IN", {minimumFractionDigits: 2})}`, x.rate, rowY + 8, { width: 65, align: "right" });
+      doc.text(`${(item.qty * item.rate).toLocaleString("en-IN", {minimumFractionDigits: 2})}`, x.amt, rowY + 8, { width: 65, align: "right" });
+      doc.text(`${item.taxPercent}`, x.igst, rowY + 8, { width: 25, align: "center" });
+      doc.text(`${(item.taxAmount || 0).toLocaleString("en-IN", {minimumFractionDigits: 2})}`, x.igst + 25, rowY + 8, { width: 55, align: "right" });
+      doc.font("Helvetica-Bold").text(`${item.totalCost.toLocaleString("en-IN", {minimumFractionDigits: 2})}`, x.total, rowY + 8, { width: 80, align: "right" });
+      rowY += rowHeight;
+    });
+
+    // TOTAL ROW
+    doc.rect(x.sno, rowY, tableWidth, 20).fillAndStroke("#f9f9f9", "#000");
+    doc.fillColor("#000").font("Helvetica-Bold").text("TOTAL", x.sno, rowY + 6, { align: "center", width: x.qty - x.sno });
+    doc.text(`${quotation.items.reduce((a, b) => a + b.qty, 0)}`, x.qty, rowY + 6, { width: 30, align: "center" });
+    doc.text(`${quotation.subtotal.toLocaleString("en-IN", {minimumFractionDigits: 2})}`, x.amt, rowY + 6, { width: 65, align: "right" });
+    doc.text(`${quotation.items.reduce((a,b) => a + (b.taxAmount||0), 0).toLocaleString("en-IN", {minimumFractionDigits: 2})}`, x.igst + 25, rowY + 6, { width: 55, align: "right" });
+    doc.text(`${quotation.grandTotal.toLocaleString("en-IN", {minimumFractionDigits: 2})}`, x.total, rowY + 6, { width: 80, align: "right" });
+    
+    rowY += 20;
+    doc.rect(x.sno, rowY, tableWidth, 25).stroke();
+    doc.fontSize(10).text(`Total Invoice Amount (Rounded off) :  Rs.${Math.round(quotation.grandTotal).toLocaleString("en-IN")}`, x.sno, rowY + 7, { align: "center", width: tableWidth });
+
+    // --- FOOTER SECTION ---
+    rowY += 35;
+    const footerH = 140;
+    if (rowY + footerH > 800) {
+        doc.addPage();
+        rowY = 40;
+    }
+
+    // Main Footer Box
+    doc.rect(margin, rowY, tableWidth, footerH).lineWidth(0.8).strokeColor("#000").stroke();
+    
+    // Vertical Divider
+    const midX = margin + (tableWidth / 2);
+    doc.moveTo(midX, rowY).lineTo(midX, rowY + footerH).stroke();
+    
+    // Left Side: Amount in Words & Remarks
+    doc.fontSize(8).font("Helvetica").text("Amount Chargeable (in words):", margin + 5, rowY + 5);
+    const amountWords = numberToWords(quotation.grandTotal);
+    doc.fontSize(9).font("Helvetica-Bold").text(`INR ${amountWords.toUpperCase()}`, margin + 5, rowY + 15, { width: (tableWidth/2) - 10 });
+    
+    doc.fontSize(8).font("Helvetica").text("Remarks:", margin + 5, rowY + 75);
+    doc.text(quotation.description || 'Warranty: As per Manufacturer', margin + 5, rowY + 85, { width: (tableWidth/2) - 10 });
+
+    // Right Side: Bank Details
+    doc.fontSize(9).font("Helvetica").text("Company's Bank Details :", midX + 5, rowY + 5);
+    const bankStartY = rowY + 22;
+    const labelX = midX + 5;
+    const valueX = midX + 105;
+    const colonX = midX + 100;
+
+    const labels = [
+        "A/c Holder's Name", 
+        "Bank Name", 
+        "A/c no.", 
+        "Branch & IFSC Code", 
+        "SWIFT Code"
+    ];
+    const values = [
+      "WEBERFOX TECHNOLOGIES PVT. LTD.",
+      (bankAccount?.bankName || "AXIS BANK").toUpperCase(),
+      bankAccount?.accountNumber || "921020052009341",
+      `${(bankAccount?.branch || "KOCHI").toUpperCase()} & ${bankAccount?.ifsc || "UTIB0000081"}`,
+      bankAccount?.swiftCode || "AXISINBB081"
+    ];
+
+    let currentBankY = bankStartY;
+    labels.forEach((label, idx) => {
+        const textOptions = { width: (tableWidth/2) - 110 };
+        const rowH = Math.max(12, doc.heightOfString(values[idx], textOptions));
+        
+        doc.font("Helvetica").text(label, labelX, currentBankY);
+        doc.text(":", colonX, currentBankY);
+        doc.font("Helvetica-Bold").text(values[idx], valueX, currentBankY, textOptions);
+        
+        currentBankY += rowH + 2; 
+    });
+
+    // Signatory box horizontal line (Placed below bank details)
+    const sigLineY = Math.max(rowY + 90, currentBankY + 5);
+    doc.moveTo(midX, sigLineY).lineTo(endX, sigLineY).stroke();
+
+    // Authorized Signatory section
+    doc.fontSize(8).font("Helvetica-Bold").text("for WEBERFOX TECHNOLOGIES PVT. LTD.", midX + 5, sigLineY + 5, { align: "center", width: (tableWidth/2) - 10 });
+    doc.fontSize(8).font("Helvetica").text("Authorized signatory", midX + 5, rowY + footerH - 15, { align: "right", width: (tableWidth/2) - 15 });
+
+    doc.end();
+  } catch (error) {
+    if (!res.headersSent) res.status(500).json({ message: error.message, status: false });
+  }
 };
 
-//  10. GET /api/quotations/export/pdf 
+
+//  10. GET /api/quotations/export/pdf - OPTIMIZED with pagination
 export const exportQuotationsPdf = async (req, res) => {
     try {
-        const quotations = await Quotation.find({}).sort({ createdAt: -1 });
+        // ✅ Support optional pagination: ?limit=100&page=1
+        const limit = Math.min(Number(req.query.limit) || 500, 1000); // Max 1000 per request
+        const page = Math.max(Number(req.query.page) || 1, 1);
+        const skip = (page - 1) * limit;
 
+        // ✅ Use .lean() for faster queries + field projection
+        const quotations = await Quotation.find({})
+            .select("quotationNo customerId date validity quotationType grandTotal status")
+            .lean()
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit);
+
+        // ✅ Batch fetch customer names
         const customerIds = [...new Set(quotations.map((q) => q.customerId?.toString()))];
-        const customers = await Customer.find({ _id: { $in: customerIds } });
-        const customerMap = customers.reduce((acc, c) => { acc[c._id.toString()] = c; return acc; }, {});
+        const customers = await Customer.find({ _id: { $in: customerIds } })
+            .select("_id firstName lastName")
+            .lean();
+        const customerMap = customers.reduce((acc, c) => { 
+            acc[c._id.toString()] = c; 
+            return acc; 
+        }, {});
+
+        // ✅ Set headers BEFORE doc generation - enables streaming
+        res.setHeader("Content-Type", "application/pdf");
+        res.setHeader("Content-Disposition", `attachment; filename=quotations-${Date.now()}.pdf`);
 
         const doc = new PDFDocument({ size: "A4", layout: "landscape", margin: 40, bufferPages: true });
-        const chunks = [];
-        doc.on("data", (c) => chunks.push(c));
-        doc.on("end", () => {
-            const buffer = Buffer.concat(chunks);
-            res.setHeader("Content-Type", "application/pdf");
-            res.setHeader("Content-Disposition", `attachment; filename=quotations-${Date.now()}.pdf`);
-            res.send(buffer);
-        });
+        doc.pipe(res);
 
         doc.fontSize(20).font("Helvetica-Bold").fillColor("#fe9f43").text("DreamsPOS ERP – Quotation List", { align: "center" });
         doc.fontSize(9).font("Helvetica").fillColor("#666").text(`Generated: ${new Date().toLocaleDateString()}`, { align: "right" });
@@ -573,19 +683,35 @@ export const exportQuotationsPdf = async (req, res) => {
             doc.switchToPage(i);
             doc.fontSize(8).fillColor("#aaa").text(`Page ${i + 1} of ${pages.count}`, 40, doc.page.height - 30, { align: "center" });
         }
-        doc.end();
+        doc.end(); // ✅ Flushes pipe to response
     } catch (error) {
-        res.status(500).json({ message: error.message, status: false });
+        if (!res.headersSent) {
+            res.status(500).json({ message: error.message, status: false });
+        }
     }
 };
 
-//  11. GET /api/quotations/export/xlsx 
+//  11. GET /api/quotations/export/xlsx - OPTIMIZED with pagination
 export const exportQuotationsXlsx = async (req, res) => {
     try {
-        const quotations = await Quotation.find({}).sort({ createdAt: -1 });
+        // ✅ Support optional pagination: ?limit=500&page=1
+        const limit = Math.min(Number(req.query.limit) || 500, 2000); // Max 2000 per request
+        const page = Math.max(Number(req.query.page) || 1, 1);
+        const skip = (page - 1) * limit;
 
+        // ✅ Use .lean() for faster queries + field projection
+        const quotations = await Quotation.find({})
+            .select("quotationNo customerId date validity quotationType reference subtotal grandTotal amountInWords status createdAt")
+            .lean()
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit);
+
+        // ✅ Batch fetch customer names
         const customerIds = [...new Set(quotations.map((q) => q.customerId?.toString()))];
-        const customers = await Customer.find({ _id: { $in: customerIds } });
+        const customers = await Customer.find({ _id: { $in: customerIds } })
+            .select("_id firstName lastName")
+            .lean();
         const customerMap = customers.reduce((acc, c) => { acc[c._id.toString()] = c; return acc; }, {});
 
         const workbook = new ExcelJS.Workbook();
@@ -632,9 +758,10 @@ export const exportQuotationsXlsx = async (req, res) => {
 
         ws.autoFilter = { from: "A1", to: "L1" };
 
-        const buffer = await workbook.xlsx.writeBuffer();
         res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
         res.setHeader("Content-Disposition", `attachment; filename=quotations-${Date.now()}.xlsx`);
+        
+        const buffer = await workbook.xlsx.writeBuffer();
         res.send(buffer);
     } catch (error) {
         res.status(500).json({ message: error.message, status: false });

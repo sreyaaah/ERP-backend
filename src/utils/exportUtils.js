@@ -1,28 +1,21 @@
 import ExcelJS from "exceljs";
 import PDFDocument from "pdfkit";
 
-//Export customers to Excel
-
-export const exportToExcel = async (customers) => {
+// Export entities to Excel
+export const exportToExcel = async (data) => {
     const workbook = new ExcelJS.Workbook();
-    const worksheet = workbook.addWorksheet("Customers");
+    const worksheet = workbook.addWorksheet("Data");
 
-    // Define columns
     worksheet.columns = [
         { header: "S.No", key: "sno", width: 8 },
-        { header: "Customer Code", key: "code", width: 15 },
-        { header: "First Name", key: "firstName", width: 20 },
-        { header: "Last Name", key: "lastName", width: 20 },
+        { header: "Name", key: "name", width: 25 },
         { header: "Email", key: "email", width: 30 },
         { header: "Phone", key: "phone", width: 15 },
         { header: "Address", key: "address", width: 30 },
         { header: "City", key: "city", width: 15 },
         { header: "State", key: "state", width: 15 },
         { header: "Country", key: "country", width: 15 },
-        { header: "Postal Code", key: "postalCode", width: 12 },
-        { header: "GSTIN", key: "gstin", width: 20 },
-        { header: "Status", key: "status", width: 10 },
-        { header: "Created At", key: "createdAt", width: 20 }
+        { header: "Status", key: "status", width: 10 }
     ];
 
     const headerRow = worksheet.getRow(1);
@@ -33,36 +26,26 @@ export const exportToExcel = async (customers) => {
         fgColor: { argb: "FF4472C4" }
     };
 
-    customers.forEach((customer, index) => {
+    data.forEach((item, index) => {
+        const name = item.name || `${item.firstName || ""} ${item.lastName || ""}`.trim();
         worksheet.addRow({
             sno: index + 1,
-            code: customer.code,
-            firstName: customer.firstName,
-            lastName: customer.lastName,
-            email: customer.email,
-            phone: customer.phone || "",
-            address: customer.address || "",
-            city: customer.city || "",
-            state: customer.state || "",
-            country: customer.country || "",
-            postalCode: customer.postalCode || "",
-            gstin: customer.gstin || "",
-            status: customer.status,
-            createdAt: customer.createdAt ? new Date(customer.createdAt).toLocaleDateString() : "-"
+            name: name || "N/A",
+            email: item.email,
+            phone: item.phone || "",
+            address: item.address || "",
+            city: item.city || "",
+            state: item.state || "",
+            country: item.country || "",
+            status: item.status
         });
     });
 
-    worksheet.autoFilter = {
-        from: "A1",
-        to: "N1"
-    }
-
-    const buffer = await workbook.xlsx.writeBuffer();
-    return buffer;
+    return await workbook.xlsx.writeBuffer();
 };
 
-// Export customers to PDF
-export const exportToPDF = (customers) => {
+// Export entities to PDF
+export const exportToPDF = (data) => {
     return new Promise((resolve, reject) => {
         try {
             const doc = new PDFDocument({
@@ -73,40 +56,24 @@ export const exportToPDF = (customers) => {
             });
 
             const chunks = [];
-
             doc.on("data", (chunk) => chunks.push(chunk));
             doc.on("end", () => resolve(Buffer.concat(chunks)));
             doc.on("error", reject);
 
-            // Title
-            doc.fontSize(20).font("Helvetica-Bold").text("Customer List", { align: "center" });
+            doc.fontSize(20).font("Helvetica-Bold").text("Export Report", { align: "center" });
             doc.moveDown();
-
-            // Date
             doc.fontSize(10).font("Helvetica").text(`Generated on: ${new Date().toLocaleDateString()}`, { align: "right" });
             doc.moveDown();
 
-            // Table header
             const tableTop = 150;
             const itemHeight = 25;
             let currentY = tableTop;
 
-            // Column positions
-            const cols = {
-                code: 50,
-                name: 120,
-                email: 250,
-                phone: 380,
-                city: 480,
-                status: 580,
-                country: 650
-            };
+            const cols = { name: 50, email: 220, phone: 400, city: 520, status: 620, country: 700 };
 
-            // Draw header
             doc.fontSize(10).font("Helvetica-Bold");
             doc.rect(40, currentY - 5, 760, 20).fillAndStroke("#4472C4", "#000");
             doc.fillColor("#FFF");
-            doc.text("Code", cols.code, currentY);
             doc.text("Name", cols.name, currentY);
             doc.text("Email", cols.email, currentY);
             doc.text("Phone", cols.phone, currentY);
@@ -117,128 +84,95 @@ export const exportToPDF = (customers) => {
             currentY += itemHeight;
             doc.fillColor("#000").font("Helvetica");
 
-            // Draw rows
-            customers.forEach((customer, index) => {
-                // Check if we need a new page
+            data.forEach((item, index) => {
                 if (currentY > 500) {
                     doc.addPage({ size: "A4", layout: "landscape", margin: 50 });
                     currentY = 50;
                 }
 
-                // Alternate row colors
                 if (index % 2 === 0) {
-                    doc.rect(40, currentY - 5, 760, 20).fillAndStroke("#F0F0F0", "#E0E0E0");
+                    doc.rect(40, currentY - 5, 760, 20).fillAndStroke("#F5F5F5", "#EEE");
                 } else {
-                    doc.rect(40, currentY - 5, 760, 20).stroke("#E0E0E0");
+                    doc.rect(40, currentY - 5, 760, 20).stroke("#EEE");
                 }
 
-                doc.fillColor("#000");
-                doc.fontSize(9);
-                doc.text(customer.code || "", cols.code, currentY, { width: 60, ellipsis: true });
-                doc.text(`${customer.firstName} ${customer.lastName}`, cols.name, currentY, { width: 120, ellipsis: true });
-                doc.text(customer.email || "", cols.email, currentY, { width: 120, ellipsis: true });
-                doc.text(customer.phone || "", cols.phone, currentY, { width: 90, ellipsis: true });
-                doc.text(customer.city || "", cols.city, currentY, { width: 90, ellipsis: true });
-                doc.text(customer.status || "", cols.status, currentY, { width: 60 });
-                doc.text(customer.country || "", cols.country, currentY, { width: 100, ellipsis: true });
+                doc.fillColor("#000").fontSize(9);
+                const name = (item.name || `${item.firstName || ""} ${item.lastName || ""}`).trim();
+                doc.text(name || "N/A", cols.name, currentY, { width: 150, ellipsis: true });
+                doc.text(item.email || "N/A", cols.email, currentY, { width: 120, ellipsis: true });
+                doc.text(item.phone || "N/A", cols.phone, currentY, { width: 90, ellipsis: true });
+                doc.text(item.city || "N/A", cols.city, currentY, { width: 90, ellipsis: true });
+                doc.text(item.status || "N/A", cols.status, currentY, { width: 60 });
+                doc.text(item.country || "N/A", cols.country, currentY, { width: 100, ellipsis: true });
 
                 currentY += itemHeight;
             });
 
-            // Footer
             const pages = doc.bufferedPageRange();
             for (let i = 0; i < pages.count; i++) {
                 doc.switchToPage(i);
-                doc.fontSize(8).text(
-                    `Page ${i + 1} of ${pages.count}`,
-                    50,
-                    doc.page.height - 50,
-                    { align: "center" }
-                );
+                doc.fontSize(8).text(`Page ${i + 1} of ${pages.count}`, 0, doc.page.height - 40, { align: "center", width: doc.page.width });
             }
 
             doc.end();
-        } catch (error) {
-            reject(error);
-        }
+        } catch (error) { reject(error); }
     });
 };
 
-//Export single customer details to PDF
-export const exportCustomerDetailsToPDF = (customer) => {
+// Export individual profile details
+const drawDetailRow = (doc, label, value, currentY) => {
+    doc.fontSize(11).font("Helvetica-Bold").fillColor("#666").text(label, 100, currentY);
+    doc.font("Helvetica").fillColor("#333").text(value || "N/A", 250, currentY);
+    return currentY + 25;
+};
+
+const exportDetailToPDF = (title, subtitle, codeLabel, entity) => {
     return new Promise((resolve, reject) => {
         try {
-            const doc = new PDFDocument({
-                size: "A4",
-                margin: 50,
-                bufferPages: true
-            });
-
+            const doc = new PDFDocument({ size: "A4", margin: 50, bufferPages: true });
             const chunks = [];
-            doc.on("data", (chunk) => chunks.push(chunk));
+            doc.on("data", (c) => chunks.push(c));
             doc.on("end", () => resolve(Buffer.concat(chunks)));
             doc.on("error", reject);
 
-            // Header - Business Name
             doc.fontSize(24).font("Helvetica-Bold").fillColor("#fe9f43").text("DreamsPOS ERP", { align: "center" });
-            doc.fontSize(10).font("Helvetica").fillColor("#666").text("Customer Profile Report", { align: "center" });
+            doc.fontSize(10).font("Helvetica").fillColor("#666").text(subtitle, { align: "center" });
             doc.moveDown(2);
 
-            // Report Details Row
             doc.fontSize(10).font("Helvetica-Bold").fillColor("#333");
             doc.text(`Report Date: ${new Date().toLocaleDateString()}`, { align: "right" });
-            doc.text(`Customer Code: ${customer.code}`, { align: "left" });
             doc.moveDown();
-
-            // Divider
             doc.moveTo(50, doc.y).lineTo(550, doc.y).strokeColor("#eee").stroke();
             doc.moveDown(2);
 
-            // Main Info Section
             doc.fontSize(16).font("Helvetica-Bold").fillColor("#333").text("General Information");
             doc.moveDown();
 
-            const leftCol = 100;
-            const rightCol = 250;
             let currentY = doc.y;
+            const name = (entity.name || `${entity.firstName || ""} ${entity.lastName || ""}`).trim();
+            currentY = drawDetailRow(doc, "Name:", name || "N/A", currentY);
+            currentY = drawDetailRow(doc, "Email:", entity.email, currentY);
+            currentY = drawDetailRow(doc, "Phone:", entity.phone, currentY);
+            currentY = drawDetailRow(doc, "Status:", entity.status, currentY);
+            if (entity.gstin) currentY = drawDetailRow(doc, "GSTIN:", entity.gstin, currentY);
 
-            const drawDetailRow = (label, value) => {
-                doc.fontSize(11).font("Helvetica-Bold").fillColor("#666").text(label, leftCol, currentY);
-                doc.font("Helvetica").fillColor("#333").text(value || "N/A", rightCol, currentY);
-                currentY += 25;
-            };
-
-            drawDetailRow("Full Name:", `${customer.firstName} ${customer.lastName || ""}`);
-            drawDetailRow("Email Address:", customer.email);
-            drawDetailRow("Phone Number:", customer.phone);
-            drawDetailRow("Status:", customer.status);
-            drawDetailRow("GST Number:", customer.gstin);
-
-            doc.moveDown(2);
-            currentY = doc.y;
-
-            // Address Section
+            doc.moveDown();
+            currentY = doc.y + 10;
             doc.fontSize(16).font("Helvetica-Bold").fillColor("#333").text("Location Details");
             doc.moveDown();
             currentY = doc.y;
-
-            drawDetailRow("Address:", customer.address);
-            drawDetailRow("City:", customer.city);
-            drawDetailRow("State:", customer.state);
-            drawDetailRow("Country:", customer.country);
-            drawDetailRow("Postal Code:", customer.postalCode);
-
-            // Footer
-            doc.fontSize(8).fillColor("#999").text(
-                "Generated by DreamsPOS ERP System - Confidential Customer Information",
-                50,
-                doc.page.height - 50,
-                { align: "center" }
-            );
+            currentY = drawDetailRow(doc, "Address:", entity.address, currentY);
+            currentY = drawDetailRow(doc, "City:", entity.city, currentY);
+            currentY = drawDetailRow(doc, "State:", entity.state, currentY);
+            currentY = drawDetailRow(doc, "Country:", entity.country, currentY);
+            if (entity.postalCode) currentY = drawDetailRow(doc, "Postal Code:", entity.postalCode, currentY);
 
             doc.end();
-        } catch (error) {
-            reject(error);
-        }
+        } catch (e) { reject(e); }
     });
 };
+
+export const exportCustomerDetailsToPDF = (entity) => exportDetailToPDF("DreamsPOS ERP", "Customer Profile Report", "Customer Code", entity);
+export const exportSupplierDetailsToPDF = (entity) => exportDetailToPDF("DreamsPOS ERP", "Supplier Profile Report", "Supplier Code", entity);
+export const exportStoreDetailsToPDF = (entity) => exportDetailToPDF("DreamsPOS ERP", "Store Profile Report", "Store Code", entity);
+export const exportWarehouseDetailsToPDF = (entity) => exportDetailToPDF("DreamsPOS ERP", "Warehouse Profile Report", "Warehouse Code", entity);

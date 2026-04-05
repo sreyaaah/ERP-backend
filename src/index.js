@@ -21,6 +21,9 @@ import taxRoutes from "./routes/taxRoutes.js";
 import currencyRoutes from "./routes/currencyRoutes.js";
 import purchaseRoutes from "./routes/purchaseRoutes.js";
 import dashboardRoutes from "./routes/dashboardRoutes.js";
+import supplierRoutes from "./routes/supplierRoutes.js";
+import storeRoutes from "./routes/storeRoutes.js";
+import warehouseRoutes from "./routes/warehouseRoutes.js";
 
 dotenv.config();
 
@@ -74,6 +77,11 @@ app.use("/api/purchases", purchaseRoutes);
 
 // Dashboard module
 app.use("/api/dashboard", dashboardRoutes);
+
+// Supplier, Store, and Warehouse modules
+app.use("/api/suppliers", supplierRoutes);
+app.use("/api/stores", storeRoutes);
+app.use("/api/warehouses", warehouseRoutes);
 
 // Dropdown data for product form
 app.use("/api", dropdownRoutes);

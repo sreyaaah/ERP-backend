@@ -6,45 +6,28 @@ import fs from "fs";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Ensure uploads directory exists
+// Ensure uploads directories exist
+const storeUploadsDir = path.join(__dirname, "../../uploads/stores");
+if (!fs.existsSync(storeUploadsDir)) fs.mkdirSync(storeUploadsDir, { recursive: true });
+
+const warehouseUploadsDir = path.join(__dirname, "../../uploads/warehouses");
+if (!fs.existsSync(warehouseUploadsDir)) fs.mkdirSync(warehouseUploadsDir, { recursive: true });
+
 const customerUploadsDir = path.join(__dirname, "../../uploads/customers");
-if (!fs.existsSync(customerUploadsDir)) {
-    fs.mkdirSync(customerUploadsDir, { recursive: true });
-}
+if (!fs.existsSync(customerUploadsDir)) fs.mkdirSync(customerUploadsDir, { recursive: true });
 
 const brandUploadsDir = path.join(__dirname, "../../uploads/brands");
-if (!fs.existsSync(brandUploadsDir)) {
-    fs.mkdirSync(brandUploadsDir, { recursive: true });
-}
+if (!fs.existsSync(brandUploadsDir)) fs.mkdirSync(brandUploadsDir, { recursive: true });
 
 const productUploadsDir = path.join(__dirname, "../../uploads/products");
-if (!fs.existsSync(productUploadsDir)) {
-    fs.mkdirSync(productUploadsDir, { recursive: true });
-}
+if (!fs.existsSync(productUploadsDir)) fs.mkdirSync(productUploadsDir, { recursive: true });
 
 const csvUploadsDir = path.join(__dirname, "../../uploads/csv");
-if (!fs.existsSync(csvUploadsDir)) {
-    fs.mkdirSync(csvUploadsDir, { recursive: true });
-}
+if (!fs.existsSync(csvUploadsDir)) fs.mkdirSync(csvUploadsDir, { recursive: true });
 
-// Configure storage for customers
-const customerStorage = multer.diskStorage({
-    destination: (req, file, cb) => {
-        cb(null, customerUploadsDir);
-    },
-    filename: (req, file, cb) => {
-        const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-        const ext = path.extname(file.originalname);
-        const name = path.basename(file.originalname, ext);
-        cb(null, `${name}-${uniqueSuffix}${ext}`);
-    }
-});
-
-// Configure storage for brands
-const brandStorage = multer.diskStorage({
-    destination: (req, file, cb) => {
-        cb(null, brandUploadsDir);
-    },
+// Common Storage Configuration
+const createStorage = (uploadDir) => multer.diskStorage({
+    destination: (req, file, cb) => cb(null, uploadDir),
     filename: (req, file, cb) => {
         const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
         const ext = path.extname(file.originalname);
@@ -66,95 +49,37 @@ const fileFilter = (req, file, cb) => {
     }
 };
 
-// Configure multer for customers
-export const uploadCustomerImage = multer({
-    storage: customerStorage,
-    limits: {
-        fileSize: 5 * 1024 * 1024
-    },
-    fileFilter: fileFilter
-});
+// Multer Instances
+export const uploadStoreImage = multer({ storage: createStorage(storeUploadsDir), limits: { fileSize: 5 * 1024 * 1024 }, fileFilter });
+export const uploadWarehouseImage = multer({ storage: createStorage(warehouseUploadsDir), limits: { fileSize: 5 * 1024 * 1024 }, fileFilter });
+export const uploadCustomerImage = multer({ storage: createStorage(customerUploadsDir), limits: { fileSize: 5 * 1024 * 1024 }, fileFilter });
+export const uploadBrandImage = multer({ storage: createStorage(brandUploadsDir), limits: { fileSize: 5 * 1024 * 1024 }, fileFilter });
+export const uploadProductImage = multer({ storage: createStorage(productUploadsDir), limits: { fileSize: 5 * 1024 * 1024 }, fileFilter });
 
-// Configure multer for brands
-export const uploadBrandImage = multer({
-    storage: brandStorage,
-    limits: {
-        fileSize: 5 * 1024 * 1024
-    },
-    fileFilter: fileFilter
-});
-
-// Product image storage & uploader 
-const productStorage = multer.diskStorage({
-    destination: (req, file, cb) => { cb(null, productUploadsDir); },
-    filename: (req, file, cb) => {
-        const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-        const ext = path.extname(file.originalname);
-        const name = path.basename(file.originalname, ext);
-        cb(null, `${name}-${uniqueSuffix}${ext}`);
-    }
-});
-
-export const uploadProductImage = multer({
-    storage: productStorage,
-    limits: { fileSize: 5 * 1024 * 1024 },
-    fileFilter: fileFilter
-});
-
-// CSV storage & uploader 
+// CSV Multer
 const csvStorage = multer.diskStorage({
-    destination: (req, file, cb) => { cb(null, csvUploadsDir); },
+    destination: (req, file, cb) => cb(null, csvUploadsDir),
     filename: (req, file, cb) => {
         const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
         cb(null, `import-${uniqueSuffix}.csv`);
     }
 });
-
 const csvFileFilter = (req, file, cb) => {
-    if (file.mimetype === "text/csv" || file.originalname.toLowerCase().endsWith(".csv")) {
-        cb(null, true);
-    } else {
-        cb(new Error("Only CSV files are allowed"));
-    }
+    if (file.mimetype === "text/csv" || file.originalname.toLowerCase().endsWith(".csv")) cb(null, true);
+    else cb(new Error("Only CSV files are allowed"));
 };
+export const uploadCsv = multer({ storage: csvStorage, limits: { fileSize: 10 * 1024 * 1024 }, fileFilter: csvFileFilter });
 
-export const uploadCsv = multer({
-    storage: csvStorage,
-    limits: { fileSize: 10 * 1024 * 1024 },
-    fileFilter: csvFileFilter
-});
-
-// Helper function to delete old image
-export const deleteCustomerImage = (filename) => {
+// Helper functions to delete images
+const deleteFile = (dir, filename) => {
     try {
-        const fullPath = path.join(customerUploadsDir, filename);
-        if (fs.existsSync(fullPath)) {
-            fs.unlinkSync(fullPath);
-        }
-    } catch (error) {
-        // Silent fail
-    }
+        const fullPath = path.join(dir, filename);
+        if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
+    } catch (error) {}
 };
 
-export const deleteBrandImage = (filename) => {
-    try {
-        const fullPath = path.join(brandUploadsDir, filename);
-        if (fs.existsSync(fullPath)) {
-            fs.unlinkSync(fullPath);
-        }
-    } catch (error) {
-        // Silent fail
-    }
-};
-
-export const deleteProductImage = (filename) => {
-    try {
-        const fullPath = path.join(productUploadsDir, filename);
-        if (fs.existsSync(fullPath)) {
-            fs.unlinkSync(fullPath);
-        }
-    } catch (error) {
-        // Silent fail
-    }
-};
-
+export const deleteStoreImage = (filename) => deleteFile(storeUploadsDir, filename);
+export const deleteWarehouseImage = (filename) => deleteFile(warehouseUploadsDir, filename);
+export const deleteCustomerImage = (filename) => deleteFile(customerUploadsDir, filename);
+export const deleteBrandImage = (filename) => deleteFile(brandUploadsDir, filename);
+export const deleteProductImage = (filename) => deleteFile(productUploadsDir, filename);

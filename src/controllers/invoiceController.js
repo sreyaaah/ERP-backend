@@ -266,6 +266,25 @@ export const createInvoice = async (req, res) => {
             terms
         });
 
+        // --- UPDATE STOCK ---
+        if (newInvoice.items && newInvoice.items.length > 0) {
+            for (const item of newInvoice.items) {
+                if (item.productId) {
+                    const product = await Product.findById(item.productId);
+                    if (product) {
+                        const newQty = (product.quantity || 0) - (item.quantity || 0);
+                        product.quantity = Math.max(0, newQty);
+                        
+                        // Update status if stock is empty
+                        if (product.quantity <= 0) {
+                            product.status = "Out of Stock";
+                        }
+                        await product.save();
+                    }
+                }
+            }
+        }
+
         return res.status(201).json({
             status: true,
             message: "Invoice created successfully",
@@ -278,11 +297,32 @@ export const createInvoice = async (req, res) => {
 };
 
 // 4. PUT /api/invoices/update/:id
+// 4. PUT /api/invoices/update/:id
 export const updateInvoice = async (req, res) => {
     try {
         const { items, ...rest } = req.body;
         let updateData = { ...rest };
 
+        const inv = await Invoice.findById(req.params.id);
+        if (!inv) return res.status(404).json({ status: false, message: "Invoice not found" });
+
+        // --- 1. RESTORE OLD STOCK ---
+        if (inv.items && inv.items.length > 0) {
+            for (const item of inv.items) {
+                if (item.productId) {
+                    const product = await Product.findById(item.productId);
+                    if (product) {
+                        product.quantity = (product.quantity || 0) + (item.quantity || 0);
+                        if (product.quantity > 0 && product.status === "Out of Stock") {
+                            product.status = "Available";
+                        }
+                        await product.save();
+                    }
+                }
+            }
+        }
+
+        // --- 2. UPDATE INVOICE ---
         if (items) {
             const totals = computeTotals(items);
             updateData.items = totals.items;
@@ -293,6 +333,23 @@ export const updateInvoice = async (req, res) => {
 
         const updated = await Invoice.findByIdAndUpdate(req.params.id, updateData, { new: true });
         if (!updated) return res.status(404).json({ status: false, message: "Invoice not found" });
+
+        // --- 3. APPLY NEW STOCK DECREMENT ---
+        if (updated.items && updated.items.length > 0) {
+            for (const item of updated.items) {
+                if (item.productId) {
+                    const product = await Product.findById(item.productId);
+                    if (product) {
+                        const newQty = (product.quantity || 0) - (item.quantity || 0);
+                        product.quantity = Math.max(0, newQty);
+                        if (product.quantity <= 0) {
+                            product.status = "Out of Stock";
+                        }
+                        await product.save();
+                    }
+                }
+            }
+        }
 
         return res.status(200).json({
             status: true,
@@ -306,8 +363,26 @@ export const updateInvoice = async (req, res) => {
 // 5. DELETE /api/invoices/delete/:id
 export const deleteInvoice = async (req, res) => {
     try {
-        const deleted = await Invoice.findByIdAndDelete(req.params.id);
-        if (!deleted) return res.status(404).json({ status: false, message: "Invoice not found" });
+        const inv = await Invoice.findById(req.params.id);
+        if (!inv) return res.status(404).json({ status: false, message: "Invoice not found" });
+
+        // --- RESTORE STOCK ---
+        if (inv.items && inv.items.length > 0) {
+            for (const item of inv.items) {
+                if (item.productId) {
+                    const product = await Product.findById(item.productId);
+                    if (product) {
+                        product.quantity = (product.quantity || 0) + (item.quantity || 0);
+                        if (product.quantity > 0 && product.status === "Out of Stock") {
+                            product.status = "Available";
+                        }
+                        await product.save();
+                    }
+                }
+            }
+        }
+
+        await Invoice.findByIdAndDelete(req.params.id);
 
         return res.status(200).json({
             status: true,
@@ -377,6 +452,26 @@ export const updateInvoiceStatus = async (req, res) => {
 export const bulkDeleteInvoices = async (req, res) => {
     try {
         const { invoiceIds } = req.body;
+        const invoices = await Invoice.find({ _id: { $in: invoiceIds } });
+
+        // --- RESTORE STOCK ---
+        for (const inv of invoices) {
+            if (inv.items && inv.items.length > 0) {
+                for (const item of inv.items) {
+                    if (item.productId) {
+                        const product = await Product.findById(item.productId);
+                        if (product) {
+                            product.quantity = (product.quantity || 0) + (item.quantity || 0);
+                            if (product.quantity > 0 && product.status === "Out of Stock") {
+                                product.status = "Available";
+                            }
+                            await product.save();
+                        }
+                    }
+                }
+            }
+        }
+
         await Invoice.deleteMany({ _id: { $in: invoiceIds } });
         return res.status(200).json({
             status: true,

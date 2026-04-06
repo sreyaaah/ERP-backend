@@ -1,4 +1,5 @@
 import Purchase from "../models/Purchase.js";
+import Product from "../models/Product.js";
 import PDFDocument from "pdfkit";
 import ExcelJS from "exceljs";
 
@@ -55,7 +56,8 @@ export const createPurchase = async (req, res) => {
             discount,
             shipping,
             grandTotal,
-            paidAmount
+            paidAmount,
+            items = []
         } = req.body;
 
         if (!supplierName || orderTax === "" || !grandTotal) {
@@ -82,10 +84,27 @@ export const createPurchase = async (req, res) => {
             discount: Number(discount) || 0,
             shipping: Number(shipping) || 0,
             grandTotal: Number(grandTotal) || 0,
-            paidAmount: Number(paidAmount) || 0
+            paidAmount: Number(paidAmount) || 0,
+            items
         });
 
         await newPurchase.save();
+
+        // --- UPDATE STOCK (INCREMENT) ---
+        if (newPurchase.items && newPurchase.items.length > 0) {
+            for (const item of newPurchase.items) {
+                if (item.productId) {
+                    const product = await Product.findById(item.productId);
+                    if (product) {
+                        product.quantity = (product.quantity || 0) + (Number(item.quantity) || 0);
+                        if (product.quantity > 0 && product.status === "Out of Stock") {
+                            product.status = "Available";
+                        }
+                        await product.save();
+                    }
+                }
+            }
+        }
 
         res.status(201).json({
             status: true,
@@ -102,18 +121,35 @@ export const createPurchase = async (req, res) => {
 export const deletePurchase = async (req, res) => {
     try {
         const { id } = req.params;
-        const purchase = await Purchase.findByIdAndDelete(id);
+        const purchase = await Purchase.findById(id);
 
         if (!purchase) {
             return res.status(404).json({ status: false, message: "Purchase not found" });
         }
+
+        // --- REVERSE STOCK (DECREMENT) ---
+        if (purchase.items && purchase.items.length > 0) {
+            for (const item of purchase.items) {
+                if (item.productId) {
+                    const product = await Product.findById(item.productId);
+                    if (product) {
+                        product.quantity = Math.max(0, (product.quantity || 0) - (Number(item.quantity) || 0));
+                        if (product.quantity <= 0) {
+                            product.status = "Out of Stock";
+                        }
+                        await product.save();
+                    }
+                }
+            }
+        }
+
+        await Purchase.findByIdAndDelete(id);
 
         res.status(200).json({
             status: true,
             message: "Purchase deleted successfully"
         });
     } catch (error) {
-        console.error("Delete purchase failed:", error);
         res.status(500).json({ status: false, message: error.message });
     }
 };
@@ -150,17 +186,46 @@ export const updatePurchase = async (req, res) => {
             });
         }
 
-        
         const purchase = await Purchase.findById(id);
         if (!purchase) {
             return res.status(404).json({ status: false, message: "Purchase not found" });
         }
 
+        // --- 1. REVERSE OLD STOCK ---
+        if (purchase.items && purchase.items.length > 0) {
+            for (const item of purchase.items) {
+                if (item.productId) {
+                    const product = await Product.findById(item.productId);
+                    if (product) {
+                        product.quantity = Math.max(0, (product.quantity || 0) - (Number(item.quantity) || 0));
+                        if (product.quantity <= 0) product.status = "Out of Stock";
+                        await product.save();
+                    }
+                }
+            }
+        }
+
+        // --- 2. APPLY UPDATES ---
         Object.keys(updateData).forEach(key => {
             purchase[key] = updateData[key];
         });
-
         await purchase.save();
+
+        // --- 3. APPLY NEW STOCK ---
+        if (purchase.items && purchase.items.length > 0) {
+            for (const item of purchase.items) {
+                if (item.productId) {
+                    const product = await Product.findById(item.productId);
+                    if (product) {
+                        product.quantity = (product.quantity || 0) + (Number(item.quantity) || 0);
+                        if (product.quantity > 0 && product.status === "Out of Stock") {
+                            product.status = "Available";
+                        }
+                        await product.save();
+                    }
+                }
+            }
+        }
 
         res.status(200).json({
             status: true,
@@ -168,7 +233,6 @@ export const updatePurchase = async (req, res) => {
             data: purchase
         });
     } catch (error) {
-        console.error("Update purchase failed:", error);
         res.status(500).json({ status: false, message: error.message });
     }
 };
@@ -181,6 +245,26 @@ export const bulkDeletePurchases = async (req, res) => {
             return res.status(400).json({ status: false, message: "No IDs provided" });
         }
 
+        const purchases = await Purchase.find({ _id: { $in: ids } });
+
+        // --- REVERSE STOCK (DECREMENT) ---
+        for (const purchase of purchases) {
+            if (purchase.items && purchase.items.length > 0) {
+                for (const item of purchase.items) {
+                    if (item.productId) {
+                        const product = await Product.findById(item.productId);
+                        if (product) {
+                            product.quantity = Math.max(0, (product.quantity || 0) - (Number(item.quantity) || 0));
+                            if (product.quantity <= 0) {
+                                product.status = "Out of Stock";
+                            }
+                            await product.save();
+                        }
+                    }
+                }
+            }
+        }
+
         await Purchase.deleteMany({ _id: { $in: ids } });
 
         res.status(200).json({
@@ -188,7 +272,6 @@ export const bulkDeletePurchases = async (req, res) => {
             message: `${ids.length} purchases deleted successfully`
         });
     } catch (error) {
-        console.error("Bulk delete failed:", error);
         res.status(500).json({ status: false, message: error.message });
     }
 };

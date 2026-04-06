@@ -21,7 +21,15 @@ const purchaseSchema = new mongoose.Schema(
             type: String,
             enum: ["Paid", "Unpaid", "Partially Paid"],
             default: "Unpaid"
-        }
+        },
+        items: [{
+            productId: { type: mongoose.Schema.Types.ObjectId, ref: "Product" },
+            productName: { type: String },
+            quantity: { type: Number, default: 1 },
+            rate: { type: Number, default: 0 },
+            taxPercent: { type: Number, default: 0 },
+            amount: { type: Number, default: 0 }
+        }]
     },
     { timestamps: true }
 );

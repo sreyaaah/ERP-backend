@@ -105,8 +105,38 @@ export const getDashboardSummary = async (req, res) => {
         const quotationChange = getPercentageChange(quotationCount, lastMonthQuotationCount);
 
         const categoryCount = await Category.countDocuments({ status: "Active" });
+        
+        // 4b. Stock Stats
+        const lowStockCount = await Product.countDocuments({
+            $expr: {
+                $and: [
+                    { $gt: ["$quantity", 0] },
+                    { $lte: ["$quantity", { $ifNull: ["$quantityAlert", 10] }] }
+                ]
+            },
+            status: "Available"
+        });
+        const outOfStockCount = await Product.countDocuments({ quantity: { $lte: 0 } });
+        
+        const stockValueData = await Product.aggregate([
+            { $group: { _id: null, totalValue: { $sum: { $multiply: ["$priceAfterTax", "$quantity"] } } } }
+        ]);
+        const totalStockValue = stockValueData[0]?.totalValue || 0;
 
-        // 4b. Unique Suppliers (from Purchase records)
+        // 4c. Expired Products
+        const expiredCount = await Product.countDocuments({ expiryDate: { $lt: now } });
+        const nearExpiryCount = await Product.countDocuments({ 
+            expiryDate: { 
+                $gte: now, 
+                $lte: new Date(now.getTime() + (30 * 24 * 60 * 60 * 1000)) // 30 days from now
+            } 
+        });
+
+        const expiredProductsList = await Product.find({ expiryDate: { $lt: now } })
+            .limit(5)
+            .select("product sku quantity images manufacturedDate expiryDate");
+
+        // 4d. Unique Suppliers (from Purchase records)
         const suppliers = await Purchase.distinct("supplierName");
         const supplierCount = suppliers.length;
 
@@ -118,7 +148,14 @@ export const getDashboardSummary = async (req, res) => {
         const returningCount = customerLoyalty.filter(c => c.count > 1).length;
 
         // 5. Low Stock Products
-        const lowStockProducts = await Product.find({ quantity: { $lte: 10 } })
+        const lowStockProducts = await Product.find({
+            $expr: {
+                $and: [
+                    { $gt: ["$quantity", 0] },
+                    { $lte: ["$quantity", { $ifNull: ["$quantityAlert", 10] }] }
+                ]
+            }
+        })
             .limit(5)
             .select("product sku quantity images itemCode");
 
@@ -346,6 +383,11 @@ export const getDashboardSummary = async (req, res) => {
                     supplierCount,
                     firstTimeCount,
                     returningCount,
+                    expiredCount,
+                    nearExpiryCount,
+                    lowStockCount,
+                    outOfStockCount,
+                    totalStockValue,
                     totalSalesReturn: 0,
                     totalPurchaseReturn: 0,
                     totalExpenses: Math.round(totalPurchases),
@@ -359,6 +401,7 @@ export const getDashboardSummary = async (req, res) => {
                     profitChange: getPercentageChange(profit, (lastMonthSalesData[0]?.total || 0) - (lastMonthPurchasesData[0]?.total || 0))
                 },
                 lowStockProducts,
+                expiredProducts: expiredProductsList,
                 topSellingProducts,
                 topCustomers,
                 categoryStats,

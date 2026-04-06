@@ -30,8 +30,11 @@ const fmtList = (p) => ({
     taxRate: p.taxRate,
     taxType: p.taxType,
     unit: p.unitId?.name || "",
-    quantity: p.quantity,
+    quantity: (p.quantity || 0),
+    quantityAlert: (p.quantityAlert || 10),
     status: p.status,
+    manufacturedDate: toDate(p.manufacturedDate),
+    expiryDate: toDate(p.expiryDate),
     createdAt: toDate(p.createdAt)
 });
 
@@ -55,7 +58,8 @@ const fmtDetail = (p) => ({
     priceBeforeTax: p.priceBeforeTax,
     taxAmount: p.taxAmount,
     priceAfterTax: p.priceAfterTax,
-    quantity: p.quantity,
+    quantity: (p.quantity || 0),
+    quantityAlert: (p.quantityAlert || 10),
     status: p.status,
     images: p.images || [],
     customFields: p.customFields || {},
@@ -96,6 +100,24 @@ export const getProducts = async (req, res) => {
         }
         if (category) query.categoryId = category;
         if (brand) query.brandId = brand;
+
+        if (req.query.expired === "true") {
+            query.expiryDate = { $lt: new Date() };
+        }
+
+        if (req.query.lowStock === "true") {
+            query.$expr = {
+                $and: [
+                    { $gt: ["$quantity", 0] },
+                    { $lte: ["$quantity", { $ifNull: ["$quantityAlert", 10] }] }
+                ]
+            };
+            query.status = "Available";
+        }
+        
+        if (req.query.outOfStock === "true") {
+            query.quantity = { $lte: 0 };
+        }
 
         const SORT_FIELDS = { product: 1, sku: 1, price: "priceBeforeTax", quantity: 1, createdAt: 1, status: 1 };
         const sortField = SORT_FIELDS[sortBy] ? (typeof SORT_FIELDS[sortBy] === "string" ? SORT_FIELDS[sortBy] : sortBy) : "createdAt";
@@ -168,7 +190,7 @@ export const createProduct = async (req, res) => {
             storeId, warehouseId, product, slug, sku, itemCode, sellingType,
             categoryId, subCategoryId, brandId, unitId, barcodeSymbology,
             description, taxType, taxRate, priceBeforeTax, taxAmount, priceAfterTax, quantity, status,
-            customFields
+            manufacturedDate, expiryDate, customFields
         } = req.body;
 
         if (await Product.findOne({ sku: sku?.toUpperCase() }))
@@ -197,7 +219,10 @@ export const createProduct = async (req, res) => {
             taxAmount: parseFloat(taxAmount) || 0,
             priceAfterTax: parseFloat(priceAfterTax) || 0,
             quantity: parseInt(quantity) || 0,
+            quantityAlert: parseInt(customFields?.quantityAlert || req.body.quantityAlert) || 10,
             status: status || "Available",
+            manufacturedDate: manufacturedDate || null,
+            expiryDate: expiryDate || null,
             customFields: customFields || {}
         });
 
@@ -221,7 +246,7 @@ export const updateProduct = async (req, res) => {
             storeId, warehouseId, product, slug, sku, itemCode, sellingType,
             categoryId, subCategoryId, brandId, unitId, barcodeSymbology,
             description, taxType, taxRate, priceBeforeTax, taxAmount, priceAfterTax, quantity, status,
-            customFields
+            manufacturedDate, expiryDate, customFields
         } = req.body;
 
         // Duplicate checks (skip own record)
@@ -253,7 +278,12 @@ export const updateProduct = async (req, res) => {
         if (taxAmount !== undefined) existing.taxAmount = parseFloat(taxAmount);
         if (priceAfterTax !== undefined) existing.priceAfterTax = parseFloat(priceAfterTax);
         if (quantity !== undefined) existing.quantity = parseInt(quantity);
+        if (req.body.quantityAlert !== undefined || customFields?.quantityAlert !== undefined) {
+             existing.quantityAlert = parseInt(req.body.quantityAlert || customFields?.quantityAlert) || 10;
+        }
         if (status !== undefined) existing.status = status;
+        if (manufacturedDate !== undefined) existing.manufacturedDate = manufacturedDate;
+        if (expiryDate !== undefined) existing.expiryDate = expiryDate;
         if (customFields !== undefined) {
             existing.customFields = customFields;
             existing.markModified("customFields");
@@ -492,112 +522,227 @@ export const generateSku = async (req, res) => {
 
 
 
-//  EXPORT  GET /api/products/export?format=xlsx|pdf&id=... 
+//  EXPORT  GET /api/products/export?format=xlsx|pdf&lowStock=true|outOfStock=true|expired=true
 export const exportProducts = async (req, res) => {
     try {
         const { format, id } = req.query;
+
+        // Build query — same logic as getProducts
         const query = id ? { _id: id } : {};
+
+        if (req.query.expired === "true") {
+            query.expiryDate = { $lt: new Date() };
+        } else if (req.query.lowStock === "true") {
+            query.$expr = {
+                $and: [
+                    { $gt: ["$quantity", 0] },
+                    { $lte: ["$quantity", { $ifNull: ["$quantityAlert", 10] }] }
+                ]
+            };
+            query.status = "Available";
+        } else if (req.query.outOfStock === "true") {
+            query.quantity = { $lte: 0 };
+        }
+
         const products = await Product.find(query)
             .populate("categoryId", "name")
             .populate("brandId", "name")
             .populate("unitId", "name")
             .sort({ createdAt: -1 });
 
+        // Determine report title & file name
+        const isExpired = req.query.expired === "true";
+        const isLowStock = req.query.lowStock === "true";
+        const isOutOfStock = req.query.outOfStock === "true";
+
+        const title = isExpired ? "Expired Products"
+            : isLowStock ? "Low Stock Products"
+                : isOutOfStock ? "Out of Stock Products"
+                    : "All Products";
+
+        const fileName = isExpired ? "expired_products"
+            : isLowStock ? "low_stock_products"
+                : isOutOfStock ? "out_of_stock_products"
+                    : "products";
+
         if (format === "xlsx") {
             const wb = new ExcelJS.Workbook();
-            const ws = wb.addWorksheet("Products");
+            const ws = wb.addWorksheet(title);
 
-            ws.columns = [
-                { header: "S.No", key: "sno", width: 7 },
-                { header: "SKU", key: "sku", width: 16 },
-                { header: "Product", key: "product", width: 35 },
-                { header: "Category", key: "category", width: 22 },
-                { header: "Brand", key: "brand", width: 20 },
-                { header: "Unit", key: "unit", width: 12 },
-                { header: "Price (Before Tax)", key: "priceBeforeTax", width: 20 },
-                { header: "Tax Rate (%)", key: "taxRate", width: 14 },
-                { header: "Price (After Tax)", key: "priceAfterTax", width: 22 },
-                { header: "Created At", key: "createdAt", width: 16 }
-            ];
-
-            products.forEach((p, i) => {
-                ws.addRow({
-                    sno: i + 1,
-                    sku: p.sku,
-                    product: p.product,
-                    category: p.categoryId?.name || "-",
-                    brand: p.brandId?.name || "-",
-                    unit: p.unitId?.name || "-",
-                    priceBeforeTax: p.priceBeforeTax,
-                    taxRate: p.taxRate,
-                    priceAfterTax: p.priceAfterTax,
-                    createdAt: p.createdAt ? new Date(p.createdAt).toLocaleDateString() : "-"
+            // Decide columns based on mode
+            if (isExpired) {
+                ws.columns = [
+                    { header: "S.No", key: "sno", width: 7 },
+                    { header: "SKU", key: "sku", width: 16 },
+                    { header: "Product", key: "product", width: 35 },
+                    { header: "Category", key: "category", width: 22 },
+                    { header: "Qty", key: "quantity", width: 10 },
+                    { header: "Manufactured Date", key: "manufacturedDate", width: 18 },
+                    { header: "Expiry Date", key: "expiryDate", width: 16 },
+                    { header: "Status", key: "status", width: 14 },
+                ];
+                products.forEach((p, i) => {
+                    ws.addRow({
+                        sno: i + 1,
+                        sku: p.sku,
+                        product: p.product,
+                        category: p.categoryId?.name || "-",
+                        quantity: p.quantity,
+                        manufacturedDate: p.manufacturedDate ? new Date(p.manufacturedDate).toLocaleDateString() : "-",
+                        expiryDate: p.expiryDate ? new Date(p.expiryDate).toLocaleDateString() : "-",
+                        status: p.status,
+                    });
                 });
-            });
+            } else if (isLowStock || isOutOfStock) {
+                ws.columns = [
+                    { header: "S.No", key: "sno", width: 7 },
+                    { header: "SKU", key: "sku", width: 16 },
+                    { header: "Product", key: "product", width: 35 },
+                    { header: "Category", key: "category", width: 22 },
+                    ...(isLowStock ? [{ header: "Qty", key: "quantity", width: 10 }] : []),
+                    { header: "Status", key: "status", width: 14 },
+                ];
+                products.forEach((p, i) => {
+                    const isOut = (p.quantity || 0) <= 0;
+                    const stockStatus = isOut ? "Out of Stock" : "Low Stock";
+                    const row = { sno: i + 1, sku: p.sku, product: p.product, category: p.categoryId?.name || "-", status: stockStatus };
+                    if (isLowStock) row.quantity = p.quantity;
+                    ws.addRow(row);
+                });
+            } else {
+                ws.columns = [
+                    { header: "S.No", key: "sno", width: 7 },
+                    { header: "SKU", key: "sku", width: 16 },
+                    { header: "Product", key: "product", width: 35 },
+                    { header: "Category", key: "category", width: 22 },
+                    { header: "Brand", key: "brand", width: 20 },
+                    { header: "Unit", key: "unit", width: 12 },
+                    { header: "Price (Before Tax)", key: "priceBeforeTax", width: 20 },
+                    { header: "Tax Rate (%)", key: "taxRate", width: 14 },
+                    { header: "Price (After Tax)", key: "priceAfterTax", width: 22 },
+                    { header: "Created At", key: "createdAt", width: 16 }
+                ];
+                products.forEach((p, i) => {
+                    ws.addRow({
+                        sno: i + 1, sku: p.sku, product: p.product,
+                        category: p.categoryId?.name || "-", brand: p.brandId?.name || "-",
+                        unit: p.unitId?.name || "-", priceBeforeTax: p.priceBeforeTax,
+                        taxRate: p.taxRate, priceAfterTax: p.priceAfterTax,
+                        createdAt: p.createdAt ? new Date(p.createdAt).toLocaleDateString() : "-"
+                    });
+                });
+            }
 
             ws.getRow(1).font = { bold: true };
             ws.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9D9D9" } };
-            ws.autoFilter = { from: "A1", to: "J1" };
 
             res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-            res.setHeader("Content-Disposition", "attachment; filename=products.xlsx");
+            res.setHeader("Content-Disposition", `attachment; filename=${fileName}.xlsx`);
             await wb.xlsx.write(res);
             res.end();
 
         } else if (format === "pdf") {
             const doc = new PDFDocument({ margin: 30, size: "A4", layout: "landscape" });
             res.setHeader("Content-Type", "application/pdf");
-            res.setHeader("Content-Disposition", "attachment; filename=products.pdf");
+            res.setHeader("Content-Disposition", `attachment; filename=${fileName}.pdf`);
             doc.pipe(res);
 
-            if (id && products.length === 1) {
-                const p = products[0];
-                doc.fontSize(20).text("Product Details", { align: "center", underline: true });
-                doc.moveDown(1.5);
+            doc.fontSize(18).text(title, { align: "center" });
+            doc.moveDown(0.5);
 
-                const writeRow = (label, value) => {
-                    doc.fontSize(12).font("Helvetica-Bold").text(`${label}: `, { continued: true })
-                        .font("Helvetica").text(value || "N/A");
-                    doc.moveDown(0.5);
-                };
-
-                writeRow("Product Name", p.product);
-                writeRow("SKU", p.sku);
-                writeRow("Item Code", p.itemCode);
-                writeRow("Category", p.categoryId?.name);
-                writeRow("Brand", p.brandId?.name);
-                writeRow("Unit", p.unitId?.name);
-                writeRow("Selling Type", p.sellingType);
-                writeRow("Quantity", p.quantity?.toString());
-                writeRow("Price (Before Tax)", `₹${p.priceBeforeTax}`);
-                writeRow("Tax Rate (%)", p.taxRate?.toString());
-                writeRow("Price (After Tax)", `₹${p.priceAfterTax}`);
-                writeRow("Barcode Symbology", p.barcodeSymbology);
-                writeRow("Description", p.description);
-                writeRow("Status", p.status);
-            } else {
-                doc.fontSize(18).text("Products List", { align: "center" });
-                doc.moveDown(0.5);
-
-                const col = { sno: 20, sku: 65, product: 180, category: 380, brand: 500, price: 620 };
+            if (isExpired) {
+                // Expired: SKU | Product | Category | Qty | Manufactured | Expiry
+                const col = { sno: 20, sku: 50, product: 120, category: 290, qty: 400, mfg: 445, exp: 545 };
                 const rowH = 28;
                 let y = doc.y + 10;
 
                 const drawHdr = (yp) => {
                     doc.fontSize(9).font("Helvetica-Bold").fillColor("black");
-                    doc.text("S.No", col.sno, yp);
-                    doc.text("SKU", col.sku, yp);
-                    doc.text("Product", col.product, yp);
-                    doc.text("Category", col.category, yp);
-                    doc.text("Brand", col.brand, yp);
-                    doc.text("Price(₹)", col.price, yp);
+                    doc.text("S.No", col.sno, yp); doc.text("SKU", col.sku, yp);
+                    doc.text("Product", col.product, yp); doc.text("Category", col.category, yp);
+                    doc.text("Qty", col.qty, yp); doc.text("Mfg Date", col.mfg, yp);
+                    doc.text("Exp Date", col.exp, yp);
                     doc.moveTo(20, yp + 12).lineTo(790, yp + 12).strokeColor("#cccccc").stroke();
                     doc.font("Helvetica").strokeColor("black");
                 };
+                drawHdr(y); y += 18;
+                products.forEach((p, i) => {
+                    if (y + rowH > 555) { doc.addPage({ layout: "landscape" }); y = 50; drawHdr(y); y += 18; }
+                    doc.fontSize(9).fillColor("black");
+                    doc.text(`${i + 1}`, col.sno, y);
+                    doc.text(p.sku || "-", col.sku, y, { width: 65, ellipsis: true });
+                    doc.text(p.product || "-", col.product, y, { width: 160, ellipsis: true });
+                    doc.text(p.categoryId?.name || "-", col.category, y, { width: 100 });
+                    doc.text(`${p.quantity}`, col.qty, y, { width: 40 });
+                    doc.text(p.manufacturedDate ? new Date(p.manufacturedDate).toLocaleDateString() : "-", col.mfg, y, { width: 90 });
+                    doc.text(p.expiryDate ? new Date(p.expiryDate).toLocaleDateString() : "-", col.exp, y, { width: 90 });
+                    y += rowH;
+                    doc.moveTo(20, y - 8).lineTo(790, y - 8).strokeColor("#eeeeee").stroke().strokeColor("black");
+                });
 
-                drawHdr(y);
-                y += 18;
+            } else if (isLowStock || isOutOfStock) {
+                // Low/Out Stock: SKU | Product | Category | (Qty if lowStock) | Status
+                const col = isLowStock
+                    ? { sno: 20, sku: 55, product: 140, category: 360, qty: 480, status: 555 }
+                    : { sno: 20, sku: 55, product: 140, category: 360, status: 510 };
+                const rowH = 28;
+                let y = doc.y + 10;
 
+                const drawHdr = (yp) => {
+                    doc.fontSize(9).font("Helvetica-Bold").fillColor("black");
+                    doc.text("S.No", col.sno, yp); doc.text("SKU", col.sku, yp);
+                    doc.text("Product", col.product, yp); doc.text("Category", col.category, yp);
+                    if (isLowStock) doc.text("Qty", col.qty, yp);
+                    doc.text("Status", col.status, yp);
+                    doc.moveTo(20, yp + 12).lineTo(790, yp + 12).strokeColor("#cccccc").stroke();
+                    doc.font("Helvetica").strokeColor("black");
+                };
+                drawHdr(y); y += 18;
+                products.forEach((p, i) => {
+                    if (y + rowH > 555) { doc.addPage({ layout: "landscape" }); y = 50; drawHdr(y); y += 18; }
+                    doc.fontSize(9).fillColor("black");
+                    doc.text(`${i + 1}`, col.sno, y);
+                    doc.text(p.sku || "-", col.sku, y, { width: 80, ellipsis: true });
+                    doc.text(p.product || "-", col.product, y, { width: 210, ellipsis: true });
+                    doc.text(p.categoryId?.name || "-", col.category, y, { width: 110 });
+                    if (isLowStock) doc.text(`${p.quantity}`, col.qty, y, { width: 60 });
+                    const isOut = (p.quantity || 0) <= 0;
+                    const stockStatus = isOut ? "Out of Stock" : "Low Stock";
+                    doc.text(stockStatus, col.status, y, { width: 100 });
+                    y += rowH;
+                    doc.moveTo(20, y - 8).lineTo(790, y - 8).strokeColor("#eeeeee").stroke().strokeColor("black");
+                });
+
+            } else if (id && products.length === 1) {
+                const p = products[0];
+                doc.fontSize(20).text("Product Details", { align: "center", underline: true });
+                doc.moveDown(1.5);
+                const writeRow = (label, value) => {
+                    doc.fontSize(12).font("Helvetica-Bold").text(`${label}: `, { continued: true })
+                        .font("Helvetica").text(value || "N/A");
+                    doc.moveDown(0.5);
+                };
+                writeRow("Product Name", p.product); writeRow("SKU", p.sku);
+                writeRow("Item Code", p.itemCode); writeRow("Category", p.categoryId?.name);
+                writeRow("Brand", p.brandId?.name); writeRow("Unit", p.unitId?.name);
+                writeRow("Quantity", p.quantity?.toString());
+                writeRow("Price (Before Tax)", `₹${p.priceBeforeTax}`);
+                writeRow("Tax Rate (%)", p.taxRate?.toString());
+                writeRow("Price (After Tax)", `₹${p.priceAfterTax}`);
+                writeRow("Status", p.status);
+            } else {
+                const col = { sno: 20, sku: 65, product: 180, category: 380, brand: 500, price: 620 };
+                const rowH = 28;
+                let y = doc.y + 10;
+                const drawHdr = (yp) => {
+                    doc.fontSize(9).font("Helvetica-Bold").fillColor("black");
+                    doc.text("S.No", col.sno, yp); doc.text("SKU", col.sku, yp);
+                    doc.text("Product", col.product, yp); doc.text("Category", col.category, yp);
+                    doc.text("Brand", col.brand, yp); doc.text("Price(₹)", col.price, yp);
+                    doc.moveTo(20, yp + 12).lineTo(790, yp + 12).strokeColor("#cccccc").stroke();
+                    doc.font("Helvetica").strokeColor("black");
+                };
+                drawHdr(y); y += 18;
                 products.forEach((p, i) => {
                     if (y + rowH > 555) { doc.addPage({ layout: "landscape" }); y = 50; drawHdr(y); y += 18; }
                     doc.fontSize(9).fillColor("black");
@@ -611,7 +756,6 @@ export const exportProducts = async (req, res) => {
                     doc.moveTo(20, y - 8).lineTo(790, y - 8).strokeColor("#eeeeee").stroke().strokeColor("black");
                 });
             }
-
             doc.end();
         } else {
             res.status(400).json({ message: "Invalid format. Use 'xlsx' or 'pdf'.", status: false });
@@ -621,6 +765,7 @@ export const exportProducts = async (req, res) => {
         res.status(500).json({ message: error.message, status: false });
     }
 };
+
 
 // DOWNLOAD SAMPLE CSV  GET /api/products/import/sample 
 export const downloadSampleCsv = async (req, res) => {

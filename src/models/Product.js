@@ -25,10 +25,19 @@ const productSchema = new mongoose.Schema({
     taxAmount: { type: Number, default: 0, min: 0 },
     priceAfterTax: { type: Number, default: 0, min: 0 },
     quantity: { type: Number, default: 0, min: 0 },
+    quantityAlert: { type: Number, default: 10, min: 0 },
     status: { type: String, enum: ["Available", "Out of Stock", "Discontinued"], default: "Available" },
     images: [productImageSchema],
+    manufacturedDate: { type: Date, default: null },
+    expiryDate: { type: Date, default: null },
     customFields: { type: mongoose.Schema.Types.Mixed, default: {} }
 }, { timestamps: true });
+
+// Production Indexes for performance
+productSchema.index({ expiryDate: 1 });
+productSchema.index({ quantity: 1 });
+productSchema.index({ quantityAlert: 1 });
+productSchema.index({ status: 1 });
 
 const Product = mongoose.model("Product", productSchema);
 export default Product;

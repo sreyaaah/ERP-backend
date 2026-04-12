@@ -288,42 +288,40 @@ export const getDashboardCharts = async (req, res) => {
         const startOfYear = new Date(year, 0, 1);
         const endOfYear = new Date(year, 11, 31, 23, 59, 59);
 
-        // Fetch USD and INR rates for chart conversion
-        const usdCurrency = await Currency.findOne({ code: "USD" });
-        const inrCurrency = await Currency.findOne({ code: "INR" });
-
-        const usdVal = usdCurrency ? parseFloat(usdCurrency.rate) : 1;
-        const inrVal = inrCurrency ? parseFloat(inrCurrency.rate) : 0.012;
-        const multiplier = inrVal > 0 ? (usdVal / inrVal) : 83;
-
-        const salesByMonth = await Invoice.aggregate([
-            { $match: { createdAt: { $gte: startOfYear, $lte: endOfYear } } },
-            {
-                $group: {
-                    _id: { month: { $month: "$createdAt" } },
-                    total: {
-                        $sum: {
-                            $cond: [
-                                { $eq: ["$invoiceType", "International"] },
-                                { $multiply: ["$grandTotal", multiplier] },
-                                "$grandTotal"
-                            ]
+        // Fetch currencies and runs aggregations in parallel
+        const [[usdCurrency, inrCurrency], salesByMonth, purchasesByMonth] = await Promise.all([
+            Promise.all([
+                Currency.findOne({ code: "USD" }),
+                Currency.findOne({ code: "INR" })
+            ]),
+            Invoice.aggregate([
+                { $match: { createdAt: { $gte: startOfYear, $lte: endOfYear } } },
+                {
+                    $group: {
+                        _id: { month: { $month: "$createdAt" } },
+                        total: {
+                            $sum: {
+                                $cond: [
+                                    { $eq: ["$invoiceType", "International"] },
+                                    { $multiply: ["$grandTotal", (inrCurrency ? parseFloat(inrCurrency.rate) : 0.012) > 0 ? ((usdCurrency ? parseFloat(usdCurrency.rate) : 1) / (inrCurrency ? parseFloat(inrCurrency.rate) : 0.012)) : 83] },
+                                    "$grandTotal"
+                                ]
+                            }
                         }
                     }
-                }
-            },
-            { $sort: { "_id.month": 1 } }
-        ]);
-
-        const purchasesByMonth = await Purchase.aggregate([
-            { $match: { createdAt: { $gte: startOfYear, $lte: endOfYear } } },
-            {
-                $group: {
-                    _id: { month: { $month: "$createdAt" } },
-                    total: { $sum: "$grandTotal" }
-                }
-            },
-            { $sort: { "_id.month": 1 } }
+                },
+                { $sort: { "_id.month": 1 } }
+            ]),
+            Purchase.aggregate([
+                { $match: { createdAt: { $gte: startOfYear, $lte: endOfYear } } },
+                {
+                    $group: {
+                        _id: { month: { $month: "$createdAt" } },
+                        total: { $sum: "$grandTotal" }
+                    }
+                },
+                { $sort: { "_id.month": 1 } }
+            ])
         ]);
 
         // Format to 12 months array for ApexCharts
@@ -364,8 +362,10 @@ export const getOrdersChart = async (req, res) => {
         const now = new Date();
 
         // Fetch USD and INR rates for conversion
-        const usdCurrency = await Currency.findOne({ code: "USD" });
-        const inrCurrency = await Currency.findOne({ code: "INR" });
+        const [usdCurrency, inrCurrency] = await Promise.all([
+            Currency.findOne({ code: "USD" }),
+            Currency.findOne({ code: "INR" })
+        ]);
         const usdVal = usdCurrency ? parseFloat(usdCurrency.rate) : 1;
         const inrVal = inrCurrency ? parseFloat(inrCurrency.rate) : 0.012;
         const usdToInrMultiplier = inrVal > 0 ? (usdVal / inrVal) : 83;
@@ -417,23 +417,25 @@ export const getOrdersChart = async (req, res) => {
         let hourlyData, purchaseHourlyData;
 
         if (groupBy === "hour") {
-            hourlyData = await Invoice.aggregate([
-                { $match: matchStage },
-                {
-                    $group: {
-                        _id: { hour: { $hour: { date: "$createdAt", timezone: "Asia/Kolkata" } } },
-                        total: { $sum: convertToINR("$grandTotal") }
+            [hourlyData, purchaseHourlyData] = await Promise.all([
+                Invoice.aggregate([
+                    { $match: matchStage },
+                    {
+                        $group: {
+                            _id: { hour: { $hour: { date: "$createdAt", timezone: "Asia/Kolkata" } } },
+                            total: { $sum: convertToINR("$grandTotal") }
+                        }
                     }
-                }
-            ]);
-            purchaseHourlyData = await Purchase.aggregate([
-                { $match: matchStage },
-                {
-                    $group: {
-                        _id: { hour: { $hour: { date: "$createdAt", timezone: "Asia/Kolkata" } } },
-                        total: { $sum: "$grandTotal" }
+                ]),
+                Purchase.aggregate([
+                    { $match: matchStage },
+                    {
+                        $group: {
+                            _id: { hour: { $hour: { date: "$createdAt", timezone: "Asia/Kolkata" } } },
+                            total: { $sum: "$grandTotal" }
+                        }
                     }
-                }
+                ])
             ]);
 
             const salesSeries = new Array(12).fill(0);
@@ -454,25 +456,25 @@ export const getOrdersChart = async (req, res) => {
             });
         } else {
             // Group by Day
-            const dailyData = await Invoice.aggregate([
-                { $match: matchStage },
-                {
-                    $group: {
-                        _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt", timezone: "Asia/Kolkata" } },
-                        total: { $sum: convertToINR("$grandTotal") }
+            let [dailyData, dailyPurchaseData] = await Promise.all([
+                Invoice.aggregate([
+                    { $match: matchStage },
+                    {
+                        $group: {
+                            _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt", timezone: "Asia/Kolkata" } },
+                            total: { $sum: convertToINR("$grandTotal") }
+                        }
                     }
-                },
-                { $sort: { _id: 1 } }
-            ]);
-            const dailyPurchaseData = await Purchase.aggregate([
-                { $match: matchStage },
-                {
-                    $group: {
-                        _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt", timezone: "Asia/Kolkata" } },
-                        total: { $sum: "$grandTotal" }
+                ], { allowDiskUse: true }),
+                Purchase.aggregate([
+                    { $match: matchStage },
+                    {
+                        $group: {
+                            _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt", timezone: "Asia/Kolkata" } },
+                            total: { $sum: "$grandTotal" }
+                        }
                     }
-                },
-                { $sort: { _id: 1 } }
+                ], { allowDiskUse: true })
             ]);
 
             // Create range of dates
@@ -513,8 +515,10 @@ export const getTopSelling = async (req, res) => {
         const now = new Date();
 
         // Fetch USD and INR rates for conversion
-        const usdCurrency = await Currency.findOne({ code: "USD" });
-        const inrCurrency = await Currency.findOne({ code: "INR" });
+        const [usdCurrency, inrCurrency] = await Promise.all([
+            Currency.findOne({ code: "USD" }),
+            Currency.findOne({ code: "INR" })
+        ]);
         const usdVal = usdCurrency ? parseFloat(usdCurrency.rate) : 1;
         const inrVal = inrCurrency ? parseFloat(inrCurrency.rate) : 0.012;
         const usdToInrMultiplier = inrVal > 0 ? (usdVal / inrVal) : 83;
@@ -593,18 +597,22 @@ export const getRecentTransactions = async (req, res) => {
             startDate = new Date(now.getFullYear(), now.getMonth(), 1);
         }
 
-        const usdCurrency = await Currency.findOne({ code: "USD" });
-        const inrCurrency = await Currency.findOne({ code: "INR" });
+        const [usdCurrency, inrCurrency] = await Promise.all([
+            Currency.findOne({ code: "USD" }),
+            Currency.findOne({ code: "INR" })
+        ]);
         const usdVal = usdCurrency ? parseFloat(usdCurrency.rate) : 1;
         const inrVal = inrCurrency ? parseFloat(inrCurrency.rate) : 0.012;
         const usdToInrMultiplier = inrVal > 0 ? (usdVal / inrVal) : 83;
 
         const matchStage = { createdAt: { $gte: startDate } };
 
-        const sales = await Invoice.find(matchStage).sort({ createdAt: -1 }).limit(10).populate("customerId", "firstName lastName").populate("items.productId", "images");
-        const purchases = await Purchase.find(matchStage).sort({ createdAt: -1 }).limit(10);
-        const quotations = await Quotation.find(matchStage).sort({ createdAt: -1 }).limit(10).populate("customerId", "firstName lastName");
-        const invoices = await Invoice.find({ ...matchStage, type: { $ne: "Sale" } }).sort({ createdAt: -1 }).limit(10).populate("customerId", "firstName lastName avatar").populate("items.productId", "images");
+        const [sales, purchases, quotations, invoices] = await Promise.all([
+            Invoice.find(matchStage).sort({ createdAt: -1 }).limit(10).populate("customerId", "firstName lastName").populate("items.productId", "images"),
+            Purchase.find(matchStage).sort({ createdAt: -1 }).limit(10),
+            Quotation.find(matchStage).sort({ createdAt: -1 }).limit(10).populate("customerId", "firstName lastName"),
+            Invoice.find({ ...matchStage, type: { $ne: "Sale" } }).sort({ createdAt: -1 }).limit(10).populate("customerId", "firstName lastName avatar").populate("items.productId", "images")
+        ]);
 
         const processItems = (items, type) => items.map(item => {
             const doc = item.toObject();
@@ -644,8 +652,10 @@ export const getTopCustomers = async (req, res) => {
         const now = new Date();
 
         // Fetch USD and INR rates for conversion
-        const usdCurrency = await Currency.findOne({ code: "USD" });
-        const inrCurrency = await Currency.findOne({ code: "INR" });
+        const [usdCurrency, inrCurrency] = await Promise.all([
+            Currency.findOne({ code: "USD" }),
+            Currency.findOne({ code: "INR" })
+        ]);
         const usdVal = usdCurrency ? parseFloat(usdCurrency.rate) : 1;
         const inrVal = inrCurrency ? parseFloat(inrCurrency.rate) : 0.012;
         const usdToInrMultiplier = inrVal > 0 ? (usdVal / inrVal) : 83;
@@ -701,8 +711,10 @@ export const getTopCategories = async (req, res) => {
         const now = new Date();
 
         // Fetch USD and INR rates for conversion
-        const usdCurrency = await Currency.findOne({ code: "USD" });
-        const inrCurrency = await Currency.findOne({ code: "INR" });
+        const [usdCurrency, inrCurrency] = await Promise.all([
+            Currency.findOne({ code: "USD" }),
+            Currency.findOne({ code: "INR" })
+        ]);
         const usdVal = usdCurrency ? parseFloat(usdCurrency.rate) : 1;
         const inrVal = inrCurrency ? parseFloat(inrCurrency.rate) : 0.012;
         const usdToInrMultiplier = inrVal > 0 ? (usdVal / inrVal) : 83;

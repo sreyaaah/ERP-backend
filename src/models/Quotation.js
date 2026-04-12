@@ -48,5 +48,8 @@ const quotationSchema = new mongoose.Schema(
     { timestamps: true }
 );
 
+// Performance indexes
+quotationSchema.index({ createdAt: -1 });
+
 const Quotation = mongoose.model("Quotation", quotationSchema);
 export default Quotation;

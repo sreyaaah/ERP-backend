@@ -66,6 +66,7 @@ invoiceSchema.index({ createdAt: 1 });
 invoiceSchema.index({ type: 1 });
 invoiceSchema.index({ paymentStatus: 1 });
 invoiceSchema.index({ invoiceType: 1 });
+invoiceSchema.index({ customerId: 1 });
 
 const Invoice = mongoose.model("Invoice", invoiceSchema);
 export default Invoice;

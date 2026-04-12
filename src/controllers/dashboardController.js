@@ -288,12 +288,18 @@ export const getDashboardCharts = async (req, res) => {
         const startOfYear = new Date(year, 0, 1);
         const endOfYear = new Date(year, 11, 31, 23, 59, 59);
 
-        // Fetch currencies and runs aggregations in parallel
-        const [[usdCurrency, inrCurrency], salesByMonth, purchasesByMonth] = await Promise.all([
-            Promise.all([
-                Currency.findOne({ code: "USD" }),
-                Currency.findOne({ code: "INR" })
-            ]),
+        // Step 1: Fetch currencies in parallel
+        const [usdCurrency, inrCurrency] = await Promise.all([
+            Currency.findOne({ code: "USD" }),
+            Currency.findOne({ code: "INR" })
+        ]);
+
+        const usdVal = usdCurrency ? parseFloat(usdCurrency.rate) : 1;
+        const inrVal = inrCurrency ? parseFloat(inrCurrency.rate) : 0.012;
+        const multiplier = inrVal > 0 ? (usdVal / inrVal) : 83;
+
+        // Step 2: Run aggregations in parallel utilizando obtained values
+        const [salesByMonth, purchasesByMonth] = await Promise.all([
             Invoice.aggregate([
                 { $match: { createdAt: { $gte: startOfYear, $lte: endOfYear } } },
                 {
@@ -303,7 +309,7 @@ export const getDashboardCharts = async (req, res) => {
                             $sum: {
                                 $cond: [
                                     { $eq: ["$invoiceType", "International"] },
-                                    { $multiply: ["$grandTotal", (inrCurrency ? parseFloat(inrCurrency.rate) : 0.012) > 0 ? ((usdCurrency ? parseFloat(usdCurrency.rate) : 1) / (inrCurrency ? parseFloat(inrCurrency.rate) : 0.012)) : 83] },
+                                    { $multiply: ["$grandTotal", multiplier] },
                                     "$grandTotal"
                                 ]
                             }

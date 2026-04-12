@@ -110,6 +110,14 @@ app.get("/api/health", (req, res) => {
   });
 });
 
+// 404 handler (Catch all undefined routes)
+app.use((req, res, next) => {
+  res.status(404).json({
+    message: "Route not found",
+    status: false
+  });
+});
+
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error(err.stack);

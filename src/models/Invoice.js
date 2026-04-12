@@ -61,7 +61,11 @@ invoiceSchema.virtual('amountDue').get(function () {
 
 // Ensure virtuals are serialized
 invoiceSchema.set('toJSON', { virtuals: true });
-invoiceSchema.set('toObject', { virtuals: true });
+// Indexes for performance
+invoiceSchema.index({ createdAt: 1 });
+invoiceSchema.index({ type: 1 });
+invoiceSchema.index({ paymentStatus: 1 });
+invoiceSchema.index({ invoiceType: 1 });
 
 const Invoice = mongoose.model("Invoice", invoiceSchema);
 export default Invoice;

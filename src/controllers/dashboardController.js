@@ -35,12 +35,13 @@ export const getDashboardSummary = async (req, res) => {
         const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
         const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0);
 
-        const usdCurrency = await Currency.findOne({ code: "USD" });
-        const inrCurrency = await Currency.findOne({ code: "INR" });
+        const [usdCurrency, inrCurrency] = await Promise.all([
+            Currency.findOne({ code: "USD" }),
+            Currency.findOne({ code: "INR" })
+        ]);
 
         const usdVal = usdCurrency ? parseFloat(usdCurrency.rate) : 1;
         const inrVal = inrCurrency ? parseFloat(inrCurrency.rate) : 0.012;
-
         const usdToInrMultiplier = inrVal > 0 ? (usdVal / inrVal) : 83;
 
         const convertToINR = (field) => ({
@@ -51,276 +52,132 @@ export const getDashboardSummary = async (req, res) => {
             ]
         });
 
-        // 1. Totals (Filtered by time range if provided)
-        const totalSalesData = await Invoice.aggregate([
-            { $match: timeMatch },
-            { $group: { _id: null, total: { $sum: convertToINR("$grandTotal") } } }
-        ]);
-        const totalPurchasesData = await Purchase.aggregate([
-            { $match: timeMatch },
-            { $group: { _id: null, total: { $sum: "$grandTotal" } } }
-        ]);
-        const totalInvoicesDueData = await Invoice.aggregate([
-            { $match: { ...timeMatch, type: { $ne: "Sale" } } },
-            { $group: { _id: null, total: { $sum: convertToINR({ $subtract: ["$grandTotal", "$paidAmount"] }) } } }
-        ]);
-
-        // 2. Current Month Totals
-        const monthSalesData = await Invoice.aggregate([
-            { $match: { createdAt: { $gte: currentMonthStart } } },
-            { $group: { _id: null, total: { $sum: convertToINR("$grandTotal") } } }
-        ]);
-        const monthPurchasesData = await Purchase.aggregate([
-            { $match: { createdAt: { $gte: currentMonthStart } } },
-            { $group: { _id: null, total: { $sum: "$grandTotal" } } }
-        ]);
-
-        // 3. Last Month Totals (for percentages)
-        const lastMonthSalesData = await Invoice.aggregate([
-            { $match: { createdAt: { $gte: lastMonthStart, $lte: lastMonthEnd } } },
-            { $group: { _id: null, total: { $sum: convertToINR("$grandTotal") } } }
-        ]);
-        const lastMonthPurchasesData = await Purchase.aggregate([
-            { $match: { createdAt: { $gte: lastMonthStart, $lte: lastMonthEnd } } },
-            { $group: { _id: null, total: { $sum: "$grandTotal" } } }
-        ]);
-
-        // 4. Counts & Trends
-        const customerCount = await Customer.countDocuments({});
-        const lastMonthCustomerCount = await Customer.countDocuments({ createdAt: { $lte: lastMonthEnd } });
-        const customerChange = getPercentageChange(customerCount, lastMonthCustomerCount);
-
-        const productCount = await Product.countDocuments({ status: "Available" });
-        const lastMonthProductCount = await Product.countDocuments({ createdAt: { $lte: lastMonthEnd } });
-        const productChange = getPercentageChange(productCount, lastMonthProductCount);
-
-        const totalOrders = await Invoice.countDocuments({}); // All transactions
-        const invoiceCount = await Invoice.countDocuments({ type: { $ne: "Sale" } });
-        const lastMonthInvoiceCount = await Invoice.countDocuments({ type: { $ne: "Sale" }, createdAt: { $lte: lastMonthEnd } });
-        const invoiceChange = getPercentageChange(invoiceCount, lastMonthInvoiceCount);
-
-        const saleCount = await Invoice.countDocuments({ type: "Sale" });
-        const quotationCount = await Quotation.countDocuments({});
-        const lastMonthQuotationCount = await Quotation.countDocuments({ createdAt: { $lte: lastMonthEnd } });
-        const quotationChange = getPercentageChange(quotationCount, lastMonthQuotationCount);
-
-        const categoryCount = await Category.countDocuments({ status: "Active" });
-        
-        // 4b. Stock Stats
-        const lowStockCount = await Product.countDocuments({
-            $expr: {
-                $and: [
-                    { $gt: ["$quantity", 0] },
-                    { $lte: ["$quantity", { $ifNull: ["$quantityAlert", 10] }] }
-                ]
-            },
-            status: "Available"
-        });
-        const outOfStockCount = await Product.countDocuments({ quantity: { $lte: 0 } });
-        
-        const stockValueData = await Product.aggregate([
-            { $group: { _id: null, totalValue: { $sum: { $multiply: ["$priceAfterTax", "$quantity"] } } } }
-        ]);
-        const totalStockValue = stockValueData[0]?.totalValue || 0;
-
-        // 4c. Expired Products
-        const expiredCount = await Product.countDocuments({ expiryDate: { $lt: now } });
-        const nearExpiryCount = await Product.countDocuments({ 
-            expiryDate: { 
-                $gte: now, 
-                $lte: new Date(now.getTime() + (30 * 24 * 60 * 60 * 1000)) // 30 days from now
-            } 
-        });
-
-        const expiredProductsList = await Product.find({ expiryDate: { $lt: now } })
-            .limit(5)
-            .select("product sku quantity images manufacturedDate expiryDate");
-
-        // 4d. Unique Suppliers (from Purchase records)
-        const suppliers = await Purchase.distinct("supplierName");
-        const supplierCount = suppliers.length;
-
-        // 4c. Customer Loyalty (First Time vs Returning)
-        const customerLoyalty = await Invoice.aggregate([
-            { $group: { _id: "$customerId", count: { $sum: 1 } } }
-        ]);
-        const firstTimeCount = customerLoyalty.filter(c => c.count === 1).length;
-        const returningCount = customerLoyalty.filter(c => c.count > 1).length;
-
-        // 5. Low Stock Products
-        const lowStockProducts = await Product.find({
-            $expr: {
-                $and: [
-                    { $gt: ["$quantity", 0] },
-                    { $lte: ["$quantity", { $ifNull: ["$quantityAlert", 10] }] }
-                ]
-            }
-        })
-            .limit(5)
-            .select("product sku quantity images itemCode");
-
-        // 6. Top Selling Products
-        const topSellingProducts = await Invoice.aggregate([
-            { $match: timeMatch },
-            { $unwind: "$items" },
-            {
-                $group: {
-                    _id: "$items.productId",
-                    totalQty: { $sum: "$items.quantity" },
-                    totalAmount: { $sum: convertToINR("$items.amount") },
-                    productName: { $first: "$items.productName" }
-                }
-            },
-            { $sort: { totalQty: -1 } },
-            { $limit: 5 },
-            {
-                $lookup: {
-                    from: "products",
-                    localField: "_id",
-                    foreignField: "_id",
-                    as: "productDetails"
-                }
-            },
-            {
-                $project: {
-                    _id: 1,
-                    totalQty: 1,
-                    totalAmount: 1,
-                    productName: 1,
-                    images: { $arrayElemAt: ["$productDetails.images", 0] }
-                }
-            }
-        ]);
-
-        // 7. Recent Transactions
-        const rawRecentSales = await Invoice.find(timeMatch).sort({ createdAt: -1 }).limit(10).populate("customerId", "firstName lastName").populate("items.productId", "images");
-        const rawRecentPurchases = await Purchase.find(timeMatch).sort({ createdAt: -1 }).limit(10);
-        const rawRecentQuotations = await Quotation.find(timeMatch).sort({ createdAt: -1 }).limit(10).populate("customerId", "firstName lastName");
-        const rawRecentInvoices = await Invoice.find({ ...timeMatch, type: { $ne: "Sale" } }).sort({ createdAt: -1 }).limit(10).populate("customerId", "firstName lastName avatar").populate("items.productId", "images");
-
-        const recentSales = rawRecentSales.map(inv => {
-            const doc = inv.toObject();
-            if (doc.invoiceType === "International") {
-                doc.grandTotal = doc.grandTotal * usdToInrMultiplier;
-                doc.paidAmount = doc.paidAmount * usdToInrMultiplier;
-            }
-            return doc;
-        });
-
-        const recentPurchases = rawRecentPurchases.map(p => {
-            const doc = p.toObject();
-            doc.purchaseNo = doc.purchaseNumber;
-            return doc;
-        });
-
-        const recentQuotations = rawRecentQuotations.map(q => {
-            const doc = q.toObject();
-            if (doc.quotationType === "International") {
-                doc.grandTotal = doc.grandTotal * usdToInrMultiplier;
-            }
-            return doc;
-        });
-
-        const recentInvoices = rawRecentInvoices.map(inv => {
-            const doc = inv.toObject();
-            if (doc.invoiceType === "International") {
-                doc.grandTotal = doc.grandTotal * usdToInrMultiplier;
-            }
-            return doc;
-        });
-
-        // 8. Top Customers
-        const topCustomers = await Invoice.aggregate([
-            { $match: timeMatch },
-            { $group: { _id: "$customerId", totalSpend: { $sum: convertToINR("$grandTotal") }, orderCount: { $count: {} } } },
-            { $sort: { totalSpend: -1 } },
-            { $limit: 5 },
-            {
-                $lookup: {
-                    from: "customers",
-                    localField: "_id",
-                    foreignField: "_id",
-                    as: "customerInfo"
-                }
-            },
-            { $unwind: "$customerInfo" }
-        ]);
-
-        // 9. Category Distribution
-        const categoryStats = await Invoice.aggregate([
-            { $match: timeMatch },
-            { $unwind: "$items" },
-            {
-                $lookup: {
-                    from: "products",
-                    localField: "items.productId",
-                    foreignField: "_id",
-                    as: "productInfo"
-                }
-            },
-            { $unwind: "$productInfo" },
-            {
-                $lookup: {
-                    from: "categories",
-                    localField: "productInfo.categoryId",
-                    foreignField: "_id",
-                    as: "categoryInfo"
-                }
-            },
-            { $unwind: { path: "$categoryInfo", preserveNullAndEmptyArrays: true } },
-            {
-                $group: {
-                    _id: { $ifNull: ["$categoryInfo.name", "Uncategorized"] },
-                    salesCount: { $sum: "$items.quantity" },
-                    totalRevenue: { $sum: convertToINR("$items.amount") }
-                }
-            },
-            { $sort: { totalRevenue: -1 } },
-            { $limit: 3 }
-        ]);
-
-        // 10. Order Statistics 
         const thirtyDaysAgo = new Date(now);
         thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
         const heatmapMatch = (startDate && endDate) ? timeMatch : { createdAt: { $gte: thirtyDaysAgo } };
 
-        const orderStatsAll = await Invoice.aggregate([
-            { $match: heatmapMatch },
-            {
-                $group: {
-                    _id: {
-                        day: { $dayOfWeek: { date: "$createdAt", timezone: "Asia/Kolkata" } },
-                        hour: { $hour: { date: "$createdAt", timezone: "Asia/Kolkata" } }
-                    },
-                    count: { $sum: 1 }
-                }
-            }
-        ]);
-
-        // 11. Hourly Distribution FOR TODAY (for SalesDayChart)
         const startOfToday = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
         startOfToday.setHours(0, 0, 0, 0);
 
-        const todayInvoiceCount = await Invoice.countDocuments({ createdAt: { $gte: startOfToday } });
+        // Run all queries in parallel
+        const [
+            totalSalesData,
+            totalPurchasesData,
+            totalInvoicesDueData,
+            monthSalesData,
+            monthPurchasesData,
+            lastMonthSalesData,
+            lastMonthPurchasesData,
+            customerCount,
+            lastMonthCustomerCount,
+            productCount,
+            lastMonthProductCount,
+            totalOrders,
+            invoiceCount,
+            lastMonthInvoiceCount,
+            saleCount,
+            quotationCount,
+            lastMonthQuotationCount,
+            categoryCount,
+            lowStockCount,
+            outOfStockCount,
+            stockValueData,
+            expiredCount,
+            nearExpiryCount,
+            expiredProductsList,
+            suppliers,
+            customerLoyalty,
+            lowStockProducts,
+            topSellingProducts,
+            rawRecentSales,
+            rawRecentPurchases,
+            rawRecentQuotations,
+            rawRecentInvoices,
+            topCustomers,
+            categoryStats,
+            orderStatsAll,
+            todayInvoiceCount,
+            todayHourlyData,
+            todayPurchaseHourlyData
+        ] = await Promise.all([
+            Invoice.aggregate([{ $match: timeMatch }, { $group: { _id: null, total: { $sum: convertToINR("$grandTotal") } } }]),
+            Purchase.aggregate([{ $match: timeMatch }, { $group: { _id: null, total: { $sum: "$grandTotal" } } }]),
+            Invoice.aggregate([{ $match: { ...timeMatch, type: { $ne: "Sale" } } }, { $group: { _id: null, total: { $sum: convertToINR({ $subtract: ["$grandTotal", "$paidAmount"] }) } } }]),
+            Invoice.aggregate([{ $match: { createdAt: { $gte: currentMonthStart } } }, { $group: { _id: null, total: { $sum: convertToINR("$grandTotal") } } }]),
+            Purchase.aggregate([{ $match: { createdAt: { $gte: currentMonthStart } } }, { $group: { _id: null, total: { $sum: "$grandTotal" } } }]),
+            Invoice.aggregate([{ $match: { createdAt: { $gte: lastMonthStart, $lte: lastMonthEnd } } }, { $group: { _id: null, total: { $sum: convertToINR("$grandTotal") } } }]),
+            Purchase.aggregate([{ $match: { createdAt: { $gte: lastMonthStart, $lte: lastMonthEnd } } }, { $group: { _id: null, total: { $sum: "$grandTotal" } } }]),
+            Customer.countDocuments({}),
+            Customer.countDocuments({ createdAt: { $lte: lastMonthEnd } }),
+            Product.countDocuments({ status: "Available" }),
+            Product.countDocuments({ createdAt: { $lte: lastMonthEnd } }),
+            Invoice.countDocuments({}),
+            Invoice.countDocuments({ type: { $ne: "Sale" } }),
+            Invoice.countDocuments({ type: { $ne: "Sale" }, createdAt: { $lte: lastMonthEnd } }),
+            Invoice.countDocuments({ type: "Sale" }),
+            Quotation.countDocuments({}),
+            Quotation.countDocuments({ createdAt: { $lte: lastMonthEnd } }),
+            Category.countDocuments({ status: "Active" }),
+            Product.countDocuments({ $expr: { $and: [{ $gt: ["$quantity", 0] }, { $lte: ["$quantity", { $ifNull: ["$quantityAlert", 10] }] }] }, status: "Available" }),
+            Product.countDocuments({ quantity: { $lte: 0 } }),
+            Product.aggregate([{ $group: { _id: null, totalValue: { $sum: { $multiply: ["$priceAfterTax", "$quantity"] } } } }]),
+            Product.countDocuments({ expiryDate: { $lt: now } }),
+            Product.countDocuments({ expiryDate: { $gte: now, $lte: new Date(now.getTime() + (30 * 24 * 60 * 60 * 1000)) } }),
+            Product.find({ expiryDate: { $lt: now } }).limit(5).select("product sku quantity images manufacturedDate expiryDate"),
+            Purchase.distinct("supplierName"),
+            Invoice.aggregate([{ $group: { _id: "$customerId", count: { $sum: 1 } } }]),
+            Product.find({ $expr: { $and: [{ $gt: ["$quantity", 0] }, { $lte: ["$quantity", { $ifNull: ["$quantityAlert", 10] }] }] } }).limit(5).select("product sku quantity images itemCode"),
+            Invoice.aggregate([
+                { $match: timeMatch },
+                { $unwind: "$items" },
+                { $group: { _id: "$items.productId", totalQty: { $sum: "$items.quantity" }, totalAmount: { $sum: convertToINR("$items.amount") }, productName: { $first: "$items.productName" } } },
+                { $sort: { totalQty: -1 } },
+                { $limit: 5 },
+                { $lookup: { from: "products", localField: "_id", foreignField: "_id", as: "productDetails" } },
+                { $project: { _id: 1, totalQty: 1, totalAmount: 1, productName: 1, images: { $arrayElemAt: ["$productDetails.images", 0] } } }
+            ]),
+            Invoice.find(timeMatch).sort({ createdAt: -1 }).limit(10).populate("customerId", "firstName lastName").populate("items.productId", "images"),
+            Purchase.find(timeMatch).sort({ createdAt: -1 }).limit(10),
+            Quotation.find(timeMatch).sort({ createdAt: -1 }).limit(10).populate("customerId", "firstName lastName"),
+            Invoice.find({ ...timeMatch, type: { $ne: "Sale" } }).sort({ createdAt: -1 }).limit(10).populate("customerId", "firstName lastName avatar").populate("items.productId", "images"),
+            Invoice.aggregate([
+                { $match: timeMatch },
+                { $group: { _id: "$customerId", totalSpend: { $sum: convertToINR("$grandTotal") }, orderCount: { $count: {} } } },
+                { $sort: { totalSpend: -1 } },
+                { $limit: 5 },
+                { $lookup: { from: "customers", localField: "_id", foreignField: "_id", as: "customerInfo" } },
+                { $unwind: "$customerInfo" }
+            ]),
+            Invoice.aggregate([
+                { $match: timeMatch },
+                { $unwind: "$items" },
+                { $lookup: { from: "products", localField: "items.productId", foreignField: "_id", as: "productInfo" } },
+                { $unwind: "$productInfo" },
+                { $lookup: { from: "categories", localField: "productInfo.categoryId", foreignField: "_id", as: "categoryInfo" } },
+                { $unwind: { path: "$categoryInfo", preserveNullAndEmptyArrays: true } },
+                { $group: { _id: { $ifNull: ["$categoryInfo.name", "Uncategorized"] }, salesCount: { $sum: "$items.quantity" }, totalRevenue: { $sum: convertToINR("$items.amount") } } },
+                { $sort: { totalRevenue: -1 } },
+                { $limit: 3 }
+            ]),
+            Invoice.aggregate([
+                { $match: heatmapMatch },
+                { $group: { _id: { day: { $dayOfWeek: { date: "$createdAt", timezone: "Asia/Kolkata" } }, hour: { $hour: { date: "$createdAt", timezone: "Asia/Kolkata" } } }, count: { $sum: 1 } } }
+            ]),
+            Invoice.countDocuments({ createdAt: { $gte: startOfToday } }),
+            Invoice.aggregate([
+                { $match: { createdAt: { $gte: startOfToday } } },
+                { $group: { _id: { hour: { $hour: { date: "$createdAt", timezone: "Asia/Kolkata" } } }, total: { $sum: convertToINR("$grandTotal") } } }
+            ]),
+            Purchase.aggregate([
+                { $match: { createdAt: { $gte: startOfToday } } },
+                { $group: { _id: { hour: { $hour: { date: "$createdAt", timezone: "Asia/Kolkata" } } }, total: { $sum: "$grandTotal" } } }
+            ])
+        ]);
 
-        const todayHourlyData = await Invoice.aggregate([
-            { $match: { createdAt: { $gte: startOfToday } } },
-            {
-                $group: {
-                    _id: { hour: { $hour: { date: "$createdAt", timezone: "Asia/Kolkata" } } },
-                    total: { $sum: convertToINR("$grandTotal") }
-                }
-            }
-        ]);
-        const todayPurchaseHourlyData = await Purchase.aggregate([
-            { $match: { createdAt: { $gte: startOfToday } } },
-            {
-                $group: {
-                    _id: { hour: { $hour: { date: "$createdAt", timezone: "Asia/Kolkata" } } },
-                    total: { $sum: "$grandTotal" }
-                }
-            }
-        ]);
+        const supplierCount = suppliers.length;
+        const firstTimeCount = customerLoyalty.filter(c => c.count === 1).length;
+        const returningCount = customerLoyalty.filter(c => c.count > 1).length;
+        const totalStockValue = stockValueData[0]?.totalValue || 0;
 
         const totalSales = totalSalesData[0]?.total || 0;
         const totalPurchases = totalPurchasesData[0]?.total || 0;

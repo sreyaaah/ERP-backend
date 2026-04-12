@@ -40,5 +40,9 @@ purchaseSchema.pre("save", function (next) {
     next();
 });
 
+// Indexes for performance
+purchaseSchema.index({ createdAt: 1 });
+purchaseSchema.index({ paymentStatus: 1 });
+
 const Purchase = mongoose.model("Purchase", purchaseSchema);
 export default Purchase;
